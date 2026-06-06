@@ -14,6 +14,10 @@ MARKETS = {
         "finnhub_symbol": "QQQ",
         "yfinance_symbol": "QQQ",
     },
+    "GLD": {
+        "finnhub_symbol": "GLD",
+        "yfinance_symbol": "GLD",
+    },
 }
 
 STRATEGIES = ["OpeningRange"]
