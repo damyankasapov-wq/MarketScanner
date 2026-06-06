@@ -2,6 +2,18 @@
 
 All notable changes to MarketScanner are documented here.
 
+## [0.1.1.0] - 2026-06-06
+
+### Changed
+- Email alerts now use HTML with a colour-coded header banner (green for UP, red for DOWN),
+  a signal details table, and the chart embedded inline — no download required to see the chart
+- Plain-text fallback preserved for mail clients that strip HTML
+
+### Added
+- `tests/manual/test_email_backtest.py` — end-to-end smoke test that runs a GLD backtest
+  and fires a real email alert; kept in git for manual re-verification, excluded from the
+  automated regression suite
+
 ## [0.1.0.0] - 2026-06-06
 
 ### Added
