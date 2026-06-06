@@ -46,6 +46,7 @@ from marketscanner.data.yfinance_feed import fetch_today
 from marketscanner.state.store import init_db, is_on_cooldown, log_signal, set_cooldown
 from marketscanner.strategies.opening_range import OpeningRangeStrategy
 from marketscanner.ui.chart import render_chart
+from marketscanner.web.server import start_web_server
 
 OUTPUT_DIR = Path("output/backtest")
 TMP_DIR = Path("tmp")
@@ -116,6 +117,18 @@ def run_live() -> None:
     feed = FinnhubFeed(symbols=symbols, on_bar=_on_bar)
     feed.start()
     log.info("MarketScanner live — watching %s", symbols)
+
+    # HTTP chart server — serves live candlestick charts at http://<host>:8080
+    web_port = int(os.environ.get("WEB_PORT", "8080"))
+    start_web_server(
+        symbols=symbols,
+        feed=feed,
+        lock=_lock,
+        strategies=_strategies,
+        signal_history=_signal_history,
+        render_chart_fn=render_chart,
+        port=web_port,
+    )
 
     threading.Thread(target=_midnight_reset, daemon=True).start()
 

@@ -29,6 +29,8 @@ services:
       # service name rather than the external hostname in .env
       DB_HOST: db
       HEADLESS: "1"
+    ports:
+      - "8080:8080"
     volumes:
       # Persist backtest charts and tmp files across restarts
       - scanner_output:/app/output
