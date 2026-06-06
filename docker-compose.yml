@@ -1,4 +1,5 @@
 services:
+
   db:
     image: postgres:16-alpine
     environment:
@@ -9,6 +10,30 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ms -d marketscanner -q"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  scanner:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      # Override DB_HOST so the scanner reaches the db container by its
+      # service name rather than the external hostname in .env
+      DB_HOST: db
+      HEADLESS: "1"
+    volumes:
+      # Persist backtest charts and tmp files across restarts
+      - scanner_output:/app/output
+    restart: unless-stopped
 
 volumes:
   pgdata:
+  scanner_output:

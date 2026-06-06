@@ -9,4 +9,3 @@ mplfinance>=0.12.10b0
 matplotlib>=3.8.0
 pandas-market-calendars>=4.4.0
 pytz>=2024.1
-TA-Lib>=0.4.28

@@ -2,17 +2,18 @@
 # deploy.sh — deploy or update MarketScanner on OMV
 #
 # Usage (run from your dev machine):
-#   ./scripts/deploy.sh              # deploy / update
-#   ./scripts/deploy.sh --restart    # restart without pulling new code
-#   ./scripts/deploy.sh --stop       # stop the running process
-#   ./scripts/deploy.sh --status     # show whether the process is running
+#   ./scripts/deploy.sh              # build + deploy / update full stack
+#   ./scripts/deploy.sh --restart    # restart containers without pulling new code
+#   ./scripts/deploy.sh --stop       # stop all containers
+#   ./scripts/deploy.sh --status     # show container status
+#   ./scripts/deploy.sh --logs       # tail scanner logs
 #
 # Requirements on the dev machine:
 #   - SSH access to OMV (key-based auth recommended)
 #
 # First-time setup on OMV (one manual step):
-#   1. SSH in and create /opt/MarketScanner/.env from .env.example
-#   2. Run this script — it handles everything else
+#   Copy .env.example to /opt/MarketScanner/.env and fill in credentials.
+#   Then run this script — it handles everything else.
 
 set -euo pipefail
 
@@ -20,7 +21,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${SCRIPT_DIR}/../.env"
 if [ -f "$ENV_FILE" ]; then
-    # Export only the deploy-relevant vars; never eval the whole file
     while IFS='=' read -r key value; do
         [[ "$key" =~ ^(OVM_HOST|OVM_USER|DEPLOY_DIR)$ ]] && export "$key=${value//\"/}"
     done < <(grep -E '^(OVM_HOST|OVM_USER|DEPLOY_DIR)=' "$ENV_FILE")
@@ -31,8 +31,6 @@ OVM_HOST="${OVM_HOST:-openmediavault.local}"
 OVM_USER="${OVM_USER:-root}"
 DEPLOY_DIR="${DEPLOY_DIR:-/opt/MarketScanner}"
 REPO_URL="https://github.com/damyankasapov-wq/MarketScanner.git"
-SCREEN_SESSION="marketscanner"
-PYTHON="${DEPLOY_DIR}/.venv/bin/python"
 # OMV Compose plugin: stacks live under the DockerCompose shared folder.
 # Each subdirectory is visible in Services → Compose → Docker Files.
 COMPOSE_DISK_UUID="7b7a8925-0b41-4324-b00b-14e35480b383"
@@ -43,64 +41,54 @@ OMV_NEW_UUID="fa4b1c66-ef79-11e5-87a0-0002b3a176b4"
 # ─────────────────────────────────────────────────────────────────────────────
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
-info()    { echo -e "${GREEN}[deploy]${NC} $*"; }
-warn()    { echo -e "${YELLOW}[deploy]${NC} $*"; }
-error()   { echo -e "${RED}[deploy]${NC} $*" >&2; }
+info()  { echo -e "${GREEN}[deploy]${NC} $*"; }
+warn()  { echo -e "${YELLOW}[deploy]${NC} $*"; }
+error() { echo -e "${RED}[deploy]${NC} $*" >&2; }
 
 CMD="${1:-deploy}"
 
 ssh_run() {
-    # Run a command on OMV, inheriting terminal so interactive prompts work
     ssh -t "${OVM_USER}@${OVM_HOST}" "$@"
 }
 
 ssh_quiet() {
-    # Run a command on OMV, capture output
     ssh "${OVM_USER}@${OVM_HOST}" "$@"
 }
 
 # ── Subcommands ───────────────────────────────────────────────────────────────
 
 cmd_status() {
-    info "Checking process status on ${OVM_HOST}…"
-    ssh_quiet "screen -list | grep -q '${SCREEN_SESSION}' \
-        && echo 'RUNNING' || echo 'STOPPED'"
+    info "Container status on ${OVM_HOST}…"
+    ssh_quiet "
+        cd '${COMPOSE_DIR}' 2>/dev/null \
+            && docker compose -f '${STACK_NAME}.yml' ps \
+            || echo 'Stack not deployed yet — run ./scripts/deploy.sh'
+    "
 }
 
 cmd_stop() {
-    info "Stopping MarketScanner on ${OVM_HOST}…"
-    ssh_quiet "screen -S ${SCREEN_SESSION} -X quit 2>/dev/null \
-        && echo 'Stopped.' || echo 'Not running — nothing to stop.'"
+    info "Stopping MarketScanner stack on ${OVM_HOST}…"
+    ssh_quiet "
+        cd '${COMPOSE_DIR}' 2>/dev/null \
+            && docker compose -f '${STACK_NAME}.yml' down \
+            || echo 'Nothing to stop.'
+    "
 }
 
 cmd_restart() {
-    info "Restarting MarketScanner on ${OVM_HOST} (no code update)…"
+    info "Restarting MarketScanner stack on ${OVM_HOST} (no code update)…"
+    ssh_quiet "
+        cd '${COMPOSE_DIR}'
+        docker compose -f '${STACK_NAME}.yml' restart
+        docker compose -f '${STACK_NAME}.yml' ps
+    "
+}
+
+cmd_logs() {
+    info "Streaming scanner logs from ${OVM_HOST} (Ctrl-C to stop)…"
     ssh_run "
-        set -e
-        # Stop existing session if running
-        screen -S ${SCREEN_SESSION} -X quit 2>/dev/null || true
-        sleep 1
-
-        # Verify env file exists
-        if [ ! -f '${DEPLOY_DIR}/.env' ]; then
-            echo 'ERROR: ${DEPLOY_DIR}/.env not found.'
-            echo 'Copy .env.example to .env and fill in credentials.'
-            exit 1
-        fi
-
-        # Start in a new detached screen session
-        cd '${DEPLOY_DIR}'
-        screen -dmS ${SCREEN_SESSION} \
-            bash -c 'source .venv/bin/activate && python main.py 2>&1 | tee -a /var/log/marketscanner.log'
-
-        sleep 2
-        if screen -list | grep -q '${SCREEN_SESSION}'; then
-            echo 'MarketScanner started. Session: ${SCREEN_SESSION}'
-            echo \"Attach with: screen -r ${SCREEN_SESSION}\"
-        else
-            echo 'ERROR: process did not stay running. Check /var/log/marketscanner.log'
-            exit 1
-        fi
+        cd '${COMPOSE_DIR}'
+        docker compose -f '${STACK_NAME}.yml' logs -f scanner
     "
 }
 
@@ -127,131 +115,83 @@ cmd_deploy() {
             echo ''
             echo 'NOTICE: .env not found. Creating from .env.example…'
             cp '${DEPLOY_DIR}/.env.example' '${DEPLOY_DIR}/.env'
-            echo 'Edit ${DEPLOY_DIR}/.env and fill in credentials, then re-run deploy.'
+            echo 'Fill in ${DEPLOY_DIR}/.env with real credentials, then re-run deploy.'
             echo ''
         fi
 
-        # ── 3. Python venv ────────────────────────────────────────────────
-        cd '${DEPLOY_DIR}'
-        if [ ! -f '.venv/bin/activate' ]; then
-            rm -rf .venv   # remove any partial/broken venv
-            echo '--- Installing python3-venv if needed ---'
-            command -v apt-get >/dev/null 2>&1 && \
-                apt-get install -y --no-install-recommends python3-venv python3-pip 2>/dev/null | tail -3 || true
-            echo '--- Creating virtual environment ---'
-            python3 -m venv .venv
-        fi
-        source .venv/bin/activate
+        # ── 3. Stop old screen session (legacy — pre-containerisation) ────
+        screen -S marketscanner -X quit 2>/dev/null || true
 
-        # ── 4. Install / update dependencies ─────────────────────────────
-        echo '--- Installing dependencies ---'
-        pip install --quiet --upgrade pip
-        # TA-Lib C library (skip if already installed)
-        if ! python -c 'import talib' 2>/dev/null; then
-            if command -v apt-get >/dev/null 2>&1; then
-                apt-get install -y --no-install-recommends ta-lib 2>/dev/null || true
-            fi
-        fi
-        pip install --quiet -r requirements.txt
-
-        # ── 5. Docker Compose (PostgreSQL) — registered in OMV GUI ──────────
-        echo '--- Setting up MarketScanner stack in OMV Compose plugin ---'
-        # Stop old compose from /opt/MarketScanner if it was started there
-        if docker compose -f '${DEPLOY_DIR}/docker-compose.yml' ps -q 2>/dev/null | grep -q .; then
-            echo '    Stopping old stack (was started outside OMV plugin) ...'
-            docker compose -f '${DEPLOY_DIR}/docker-compose.yml' down 2>/dev/null || true
-        fi
-
-        # Place compose file in OMV watched folder
+        # ── 4. Place compose file in OMV-watched folder ───────────────────
+        echo '--- Registering stack in OMV Compose plugin ---'
         mkdir -p '${COMPOSE_DIR}'
         cp '${DEPLOY_DIR}/docker-compose.yml' '${COMPOSE_DIR}/${STACK_NAME}.yml'
+        # .env must be present in the same directory for docker compose env_file
+        cp '${DEPLOY_DIR}/.env' '${COMPOSE_DIR}/.env'
         chown -R root:root '${COMPOSE_DIR}'
         chmod 700 '${COMPOSE_DIR}'
-        chmod 600 '${COMPOSE_DIR}/${STACK_NAME}.yml'
+        chmod 600 '${COMPOSE_DIR}/${STACK_NAME}.yml' '${COMPOSE_DIR}/.env'
 
-        # Register / update the stack in the OMV Compose plugin (makes it
-        # visible in Services → Compose → Docker Files in the OMV web UI)
+        # Register / update the stack in the OMV Compose plugin so it appears
+        # in Services → Compose → Docker Files in the OMV web UI
         EXISTING_UUID=\$(omv-rpc 'Compose' 'getFileList' '{\"start\":0,\"limit\":100}' 2>/dev/null \
             | python3 -c \"import sys,json; data=json.load(sys.stdin); \
               matches=[f['uuid'] for f in data['data'] if f['name']=='${STACK_NAME}']; \
               print(matches[0] if matches else '')\" 2>/dev/null || echo '')
         UUID=\${EXISTING_UUID:-${OMV_NEW_UUID}}
-        if [ -n "\$EXISTING_UUID" ]; then
-            echo \"    Registering stack (UUID: \$UUID, update)...\"
+        if [ -n \"\$EXISTING_UUID\" ]; then
+            echo \"    Updating existing stack (UUID: \$UUID)...\"
         else
-            echo \"    Registering stack (UUID: \$UUID, new)...\"
+            echo \"    Registering new stack (UUID: \$UUID)...\"
         fi
         BODY=\$(cat '${COMPOSE_DIR}/${STACK_NAME}.yml' \
             | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')
         omv-rpc 'Compose' 'setFile' \"{
             \\\"uuid\\\": \\\"\$UUID\\\",
             \\\"name\\\": \\\"${STACK_NAME}\\\",
-            \\\"description\\\": \\\"MarketScanner — PostgreSQL signal store\\\",
+            \\\"description\\\": \\\"MarketScanner — PostgreSQL + scanner\\\",
             \\\"showenv\\\": false,
             \\\"showoverride\\\": false,
             \\\"body\\\": \$BODY,
             \\\"env\\\": \\\"\\\",
             \\\"override\\\": \\\"\\\"
         }\" > /dev/null && echo '    Stack registered in OMV GUI OK.' || \
-            echo '    WARNING: omv-rpc registration failed — stack may not appear in GUI, but will still run.'
+            echo '    WARNING: omv-rpc registration failed — stack runs but may not appear in GUI.'
 
-        # Start / reconcile the stack from the OMV-managed location
-        cd '${COMPOSE_DIR}'
-        docker compose -f '${STACK_NAME}.yml' up -d
+        # ── 5. Build scanner image and start full stack ───────────────────
+        echo '--- Building scanner image and starting full stack (db + scanner) ---'
+        # Run docker compose from DEPLOY_DIR so build context (.) resolves
+        # to the git repo root where the Dockerfile lives.
         cd '${DEPLOY_DIR}'
+        docker compose build
+        docker compose up -d
 
-        # Wait up to 15s for DB to be ready
-        for i in \$(seq 1 15); do
-            docker compose -f '${COMPOSE_DIR}/${STACK_NAME}.yml' exec -T db \
-                pg_isready -U ms -d marketscanner -q && break
-            sleep 1
-        done
-        docker compose -f '${COMPOSE_DIR}/${STACK_NAME}.yml' exec -T db \
-            pg_isready -U ms -d marketscanner -q \
-            || { echo 'ERROR: PostgreSQL did not become ready in time.'; exit 1; }
+        # Wait for containers to stabilise
+        echo '--- Waiting for containers to stabilise ---'
+        sleep 8
+        docker compose ps
 
-        # ── 6. Smoke-test DB connection ───────────────────────────────────
-        echo '--- Verifying DB connection ---'
-        python -c 'from marketscanner.state.store import init_db; init_db(); print(\"DB OK\")'
+        # Refresh the OMV-watched copy of the compose file
+        cp docker-compose.yml '${COMPOSE_DIR}/${STACK_NAME}.yml'
 
-        # ── 7. Ensure screen is installed ─────────────────────────────────
-        if ! command -v screen >/dev/null 2>&1; then
-            echo '--- Installing screen ---'
-            apt-get install -y --no-install-recommends screen 2>/dev/null | tail -3 || true
-        fi
-
-        # ── 8. Stop existing screen session ───────────────────────────────
-        screen -S ${SCREEN_SESSION} -X quit 2>/dev/null || true
-        sleep 1
-
-        # ── 9. Start MarketScanner ────────────────────────────────────────
-        mkdir -p /var/log
-        screen -dmS ${SCREEN_SESSION} \
-            bash -c 'cd ${DEPLOY_DIR} && source .venv/bin/activate && python main.py 2>&1 | tee -a /var/log/marketscanner.log'
-
-        sleep 2
-        if screen -list | grep -q '${SCREEN_SESSION}'; then
-            echo ''
-            echo '✓ MarketScanner is running.'
-            echo \"  Attach : screen -r ${SCREEN_SESSION}\"
-            echo \"  Logs   : tail -f /var/log/marketscanner.log\"
-            echo \"  Stop   : ./scripts/deploy.sh --stop\"
-        else
-            echo 'ERROR: process did not stay running. Check /var/log/marketscanner.log'
-            tail -20 /var/log/marketscanner.log 2>/dev/null || true
-            exit 1
-        fi
+        echo ''
+        echo '✓ MarketScanner stack is running.'
+        echo \"  Status  : ./scripts/deploy.sh --status\"
+        echo \"  Logs    : ./scripts/deploy.sh --logs\"
+        echo \"  Stop    : ./scripts/deploy.sh --stop\"
+        echo \"  OMV GUI : http://openmediavault.local/#/services/compose/dockerfiles\"
     "
 }
 
 # ── Dispatch ──────────────────────────────────────────────────────────────────
 case "$CMD" in
-    deploy|"")      cmd_deploy  ;;
-    --restart)      cmd_restart ;;
-    --stop)         cmd_stop    ;;
-    --status)       cmd_status  ;;
+    deploy|"")  cmd_deploy  ;;
+    --restart)  cmd_restart ;;
+    --stop)     cmd_stop    ;;
+    --status)   cmd_status  ;;
+    --logs)     cmd_logs    ;;
     *)
-        echo "Usage: $0 [deploy|--restart|--stop|--status]"
+        echo "Usage: $0 [deploy|--restart|--stop|--status|--logs]"
         exit 1
         ;;
 esac

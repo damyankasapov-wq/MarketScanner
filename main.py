@@ -4,19 +4,38 @@ MarketScanner entry point.
 Usage:
     python main.py                    # live mode (Finnhub WebSocket)
     python main.py --backtest SPY     # replay today's yfinance data for SPY
+
+Set HEADLESS=1 (or omit DISPLAY) to disable the live chart window.
+Inside Docker the HEADLESS env var is set automatically.
 """
 import argparse
 import logging
+import os
 import threading
 import time
 from datetime import date, datetime, timedelta, timezone
-
 from pathlib import Path
+
+import pytz
+
+# ── Headless detection ───────────────────────────────────────────────────────
+# Must happen BEFORE any matplotlib import so the backend can be set early.
+_HEADLESS = (
+    os.environ.get("HEADLESS", "").lower() in ("1", "true", "yes")
+    or (
+        not os.environ.get("DISPLAY")
+        and not os.environ.get("WAYLAND_DISPLAY")
+    )
+)
+if _HEADLESS:
+    import matplotlib
+    matplotlib.use("Agg")   # non-interactive PNG backend — no display needed
+# ────────────────────────────────────────────────────────────────────────────
+
 import pandas as pd
 import matplotlib.animation as animation
 import matplotlib.pyplot as plt
 import mplfinance as mpf
-import pytz
 
 from marketscanner import config
 
@@ -100,56 +119,62 @@ def run_live() -> None:
 
     threading.Thread(target=_midnight_reset, daemon=True).start()
 
-    # live chart — refreshes every 60s on the main thread
-    plt.ion()
-    fig_main = plt.figure(figsize=(14, 7))
+    if _HEADLESS:
+        # Headless mode (Docker / screen / no display): keep the process alive
+        # without opening a chart window.  Email alerts carry the chart image.
+        log.info("Headless mode — live chart window disabled")
+        while True:
+            time.sleep(60)
+    else:
+        # Interactive mode: show a live-updating chart on the main thread
+        plt.ion()
+        fig_main = plt.figure(figsize=(14, 7))
 
-    def _update_chart(frame):
-        symbol = symbols[0]
-        df = feed.get_df(symbol)
-        if df.empty:
-            return
-        with _lock:
-            signals = list(_signal_history.get(symbol, []))
+        def _update_chart(frame):
+            symbol = symbols[0]
+            df = feed.get_df(symbol)
+            if df.empty:
+                return
+            with _lock:
+                signals = list(_signal_history.get(symbol, []))
 
-        df_et = df.copy()
-        df_et.index = df_et.index.tz_convert(_ET)
+            df_et = df.copy()
+            df_et.index = df_et.index.tz_convert(_ET)
 
-        fig_main.clf()
-        ax_main = fig_main.add_subplot(211)
-        ax_vol = fig_main.add_subplot(212)
+            fig_main.clf()
+            ax_main = fig_main.add_subplot(211)
+            ax_vol = fig_main.add_subplot(212)
 
-        # look up current box from strategy state (may be None before 10:30)
-        strategy = _strategies[symbol]
-        box_top = strategy._range_high
-        box_bottom = strategy._range_low
+            strategy = _strategies[symbol]
+            box_top = strategy._range_high
+            box_bottom = strategy._range_low
 
-        add_plots = []
-        if box_top is not None:
-            add_plots.append(mpf.make_addplot(
-                pd.Series(box_top, index=df_et.index),
-                ax=ax_main, color="blue", linestyle="dotted", width=1.2,
-            ))
-        if box_bottom is not None:
-            add_plots.append(mpf.make_addplot(
-                pd.Series(box_bottom, index=df_et.index),
-                ax=ax_main, color="red", linestyle="dotted", width=1.2,
-            ))
+            add_plots = []
+            if box_top is not None:
+                add_plots.append(mpf.make_addplot(
+                    pd.Series(box_top, index=df_et.index),
+                    ax=ax_main, color="blue", linestyle="dotted", width=1.2,
+                ))
+            if box_bottom is not None:
+                add_plots.append(mpf.make_addplot(
+                    pd.Series(box_bottom, index=df_et.index),
+                    ax=ax_main, color="red", linestyle="dotted", width=1.2,
+                ))
 
-        mpf.plot(
-            df_et, type="candle", style="charles",
-            title=f"{symbol} — Opening Range Breakout",
-            ax=ax_main, volume=ax_vol,
-            addplot=add_plots if add_plots else None,
-        )
+            mpf.plot(
+                df_et, type="candle", style="charles",
+                title=f"{symbol} — Opening Range Breakout",
+                ax=ax_main, volume=ax_vol,
+                addplot=add_plots if add_plots else None,
+            )
 
-        for ts in signals:
-            ax_main.axvline(x=ts.astimezone(_ET), color="purple", linestyle="--", linewidth=1)
+            for ts in signals:
+                ax_main.axvline(x=ts.astimezone(_ET), color="purple", linestyle="--", linewidth=1)
 
-        fig_main.canvas.draw()
+            fig_main.canvas.draw()
 
-    ani = animation.FuncAnimation(fig_main, _update_chart, interval=60_000)
-    plt.show(block=True)
+        ani = animation.FuncAnimation(fig_main, _update_chart, interval=60_000)
+        plt.show(block=True)
 
 
 def run_backtest(symbol: str) -> None:
