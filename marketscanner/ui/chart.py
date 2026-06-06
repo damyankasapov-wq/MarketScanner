@@ -70,7 +70,7 @@ def render_chart(
         df_et,
         type="candle",
         style="charles",
-        title=f"{market} — Opening Range Breakout  {date_str}",
+        title=f"{market} — Opening Range Breakout  {date_str} (ET)",
         ylabel="Price",
         volume=True,
         addplot=add_plots if add_plots else None,
