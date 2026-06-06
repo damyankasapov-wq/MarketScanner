@@ -170,12 +170,17 @@ def _add_local_tz_axis(
 
     # Label the bottom (ET) axis for symmetry
     ax_bottom = axes[-1]
-    ax_bottom.set_xlabel("Market time (ET)", fontsize=8, labelpad=3)
+    ax_bottom.set_xlabel("Market time (ET)", fontsize=8, labelpad=4)
 
-    # Pull the top of the figure down slightly so the new axis label doesn't
-    # overlap the chart title that mplfinance places at the top.
+    # Expand margins so both labels are visible:
+    #   top  — pulled down to avoid the title
+    #   bottom — pushed down to show the ET xlabel
     top = fig.subplotpars.top
-    fig.subplots_adjust(top=max(top - 0.04, 0.80))
+    bottom = fig.subplotpars.bottom
+    fig.subplots_adjust(
+        top=max(top - 0.04, 0.80),
+        bottom=min(bottom + 0.05, 0.18),
+    )
 
 
 def _trim(df_et: pd.DataFrame, signal_times: Optional[list]) -> pd.DataFrame:
