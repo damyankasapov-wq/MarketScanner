@@ -9,8 +9,9 @@ import argparse
 import logging
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
+from pathlib import Path
 import pandas as pd
 import matplotlib.animation as animation
 import matplotlib.pyplot as plt
@@ -26,6 +27,11 @@ from marketscanner.data.yfinance_feed import fetch_today
 from marketscanner.state.store import init_db, is_on_cooldown, log_signal, set_cooldown
 from marketscanner.strategies.opening_range import OpeningRangeStrategy
 from marketscanner.ui.chart import render_chart
+
+OUTPUT_DIR = Path("output/backtest")
+TMP_DIR = Path("tmp")
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+TMP_DIR.mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -168,8 +174,9 @@ def run_backtest(symbol: str) -> None:
         box_bottom=strategy._range_low,
         signal_times=signal_times,
     )
-    fig.savefig(f"backtest_{symbol}.png", bbox_inches="tight")
-    log.info("Chart saved to backtest_%s.png", symbol)
+    filename = OUTPUT_DIR / f"backtest_{symbol}_{date.today()}.png"
+    fig.savefig(filename, bbox_inches="tight")
+    log.info("Chart saved to %s", filename)
 
 
 if __name__ == "__main__":
