@@ -2,6 +2,26 @@
 
 All notable changes to MarketScanner are documented here.
 
+## [0.1.2.0] - 2026-06-06
+
+### Changed
+- Full solution now runs as a two-container Docker Compose stack (db + scanner)
+  visible in OMV Services → Compose → Docker Files
+- Scanner container uses headless matplotlib (Agg backend) — no DISPLAY needed;
+  email alerts carry the inline chart image
+- `scripts/deploy.sh`: removed screen session management; now builds Docker image
+  and starts full stack; added `--logs` subcommand for `docker compose logs -f`
+- OMV Compose plugin registration is idempotent — re-deploys update in place
+
+### Added
+- `Dockerfile`: `python:3.11-slim`-based image; sets `HEADLESS=1`; installs all
+  Python deps via `requirements.txt`; persists backtest output via named volume
+- `docker-compose.yml` scanner service: waits for db healthcheck before starting,
+  injects `DB_HOST=db` so the scanner connects inside the Docker network
+
+### Removed
+- `TA-Lib` from `requirements.txt` — C library was listed but never imported
+
 ## [0.1.1.0] - 2026-06-06
 
 ### Changed
