@@ -16,6 +16,16 @@
 
 set -euo pipefail
 
+# ── Load .env from project root (if present on dev machine) ──────────────────
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="${SCRIPT_DIR}/../.env"
+if [ -f "$ENV_FILE" ]; then
+    # Export only the deploy-relevant vars; never eval the whole file
+    while IFS='=' read -r key value; do
+        [[ "$key" =~ ^(OVM_HOST|OVM_USER|DEPLOY_DIR)$ ]] && export "$key=${value//\"/}"
+    done < <(grep -E '^(OVM_HOST|OVM_USER|DEPLOY_DIR)=' "$ENV_FILE")
+fi
+
 # ── Configuration ────────────────────────────────────────────────────────────
 OVM_HOST="${OVM_HOST:-openmediavault.local}"
 OVM_USER="${OVM_USER:-root}"
