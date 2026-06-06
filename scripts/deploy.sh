@@ -126,7 +126,8 @@ cmd_deploy() {
 
         # ── 3. Python venv ────────────────────────────────────────────────
         cd '${DEPLOY_DIR}'
-        if [ ! -f '.venv/bin/python' ]; then
+        if [ ! -f '.venv/bin/activate' ]; then
+            rm -rf .venv   # remove any partial/broken venv
             echo '--- Installing python3-venv if needed ---'
             command -v apt-get >/dev/null 2>&1 && \
                 apt-get install -y --no-install-recommends python3-venv python3-pip 2>/dev/null | tail -3 || true
