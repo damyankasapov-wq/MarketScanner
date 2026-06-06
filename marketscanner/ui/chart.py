@@ -2,8 +2,13 @@
 render_chart() is a pure function: takes data, returns a matplotlib Figure.
 Never calls plt.show() or writes to disk — callers decide what to do with the Figure.
 """
-from datetime import timedelta
-from typing import Optional
+import time as _time
+from datetime import datetime, timedelta
+from typing import Optional, List
+
+from dateutil import tz as _dateutil_tz
+
+_LOCAL_TZ = _dateutil_tz.tzlocal()   # server's OS local timezone
 
 import matplotlib.pyplot as plt
 import mplfinance as mpf
@@ -98,8 +103,79 @@ def render_chart(
             if 0 <= pos < len(df_et):
                 ax.axvline(x=pos, color="purple", linestyle="--", linewidth=1.2)
 
+    _add_local_tz_axis(fig, axes, df_et)
+
     plt.close(fig)
     return fig
+
+
+def _local_tz_label() -> str:
+    """
+    Return a short label for the local timezone, e.g. 'CET', 'UTC+2'.
+    Falls back to offset notation if the OS returns a long name (common on Windows).
+    """
+    abbr = _time.strftime("%Z")   # OS-level tz name; avoids pandas Timestamp quirks
+    if len(abbr) > 6:
+        # Windows returns full names like "Central European Summer Time"
+        offset_s = _LOCAL_TZ.utcoffset(datetime.now()).total_seconds()
+        hours = int(offset_s / 3600)
+        abbr = f"UTC{hours:+d}"
+    return abbr
+
+
+def _add_local_tz_axis(
+    fig: plt.Figure,
+    axes: list,
+    df_et: pd.DataFrame,
+) -> None:
+    """
+    Adds a secondary x-axis at the top of the price chart showing times in the
+    server's local timezone. No-op if local UTC offset equals ET offset at the
+    session midpoint (i.e., both timezones currently agree).
+
+    Layout:
+      [CET / local tz label]   ← top of price subplot (new)
+      price candles
+      volume bars
+      [ET label]               ← bottom of volume subplot (existing mplfinance ticks)
+    """
+    midpoint = df_et.index[len(df_et) // 2]
+    et_offset = midpoint.utcoffset()
+    local_offset = midpoint.tz_convert(_LOCAL_TZ).utcoffset()
+    if et_offset == local_offset:
+        return  # same offset — single axis is sufficient
+
+    local_label = _local_tz_label()
+    ax_price = axes[0]  # top subplot (price)
+
+    # All subplots share x (sharex), so tick positions are consistent.
+    # Filter to positions that map to real bars.
+    tick_locs = [t for t in ax_price.get_xticks()
+                 if 0 <= round(t) < len(df_et)]
+    if not tick_locs:
+        return
+
+    local_labels: List[str] = []
+    for pos in tick_locs:
+        idx = max(0, min(int(round(pos)), len(df_et) - 1))
+        ts_local = df_et.index[idx].tz_convert(_LOCAL_TZ)
+        local_labels.append(ts_local.strftime("%H:%M"))
+
+    # Secondary axis at the top of the price chart
+    ax2 = ax_price.twiny()
+    ax2.set_xlim(ax_price.get_xlim())
+    ax2.set_xticks(tick_locs)
+    ax2.set_xticklabels(local_labels, fontsize=8)
+    ax2.set_xlabel(local_label, fontsize=8, labelpad=3)
+
+    # Label the bottom (ET) axis for symmetry
+    ax_bottom = axes[-1]
+    ax_bottom.set_xlabel("ET", fontsize=8, labelpad=3)
+
+    # Pull the top of the figure down slightly so the new axis label doesn't
+    # overlap the chart title that mplfinance places at the top.
+    top = fig.subplotpars.top
+    fig.subplots_adjust(top=max(top - 0.04, 0.80))
 
 
 def _trim(df_et: pd.DataFrame, signal_times: Optional[list]) -> pd.DataFrame:
