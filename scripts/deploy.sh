@@ -162,11 +162,17 @@ cmd_deploy() {
         echo '--- Verifying DB connection ---'
         python -c 'from marketscanner.state.store import init_db; init_db(); print(\"DB OK\")'
 
-        # ── 7. Stop existing screen session ───────────────────────────────
+        # ── 7. Ensure screen is installed ─────────────────────────────────
+        if ! command -v screen >/dev/null 2>&1; then
+            echo '--- Installing screen ---'
+            apt-get install -y --no-install-recommends screen 2>/dev/null | tail -3 || true
+        fi
+
+        # ── 8. Stop existing screen session ───────────────────────────────
         screen -S ${SCREEN_SESSION} -X quit 2>/dev/null || true
         sleep 1
 
-        # ── 8. Start MarketScanner ────────────────────────────────────────
+        # ── 9. Start MarketScanner ────────────────────────────────────────
         mkdir -p /var/log
         screen -dmS ${SCREEN_SESSION} \
             bash -c 'cd ${DEPLOY_DIR} && source .venv/bin/activate && python main.py 2>&1 | tee -a /var/log/marketscanner.log'
