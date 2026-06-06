@@ -33,6 +33,13 @@ DEPLOY_DIR="${DEPLOY_DIR:-/opt/MarketScanner}"
 REPO_URL="https://github.com/damyankasapov-wq/MarketScanner.git"
 SCREEN_SESSION="marketscanner"
 PYTHON="${DEPLOY_DIR}/.venv/bin/python"
+# OMV Compose plugin: stacks live under the DockerCompose shared folder.
+# Each subdirectory is visible in Services → Compose → Docker Files.
+COMPOSE_DISK_UUID="7b7a8925-0b41-4324-b00b-14e35480b383"
+COMPOSE_DIR="/srv/dev-disk-by-uuid-${COMPOSE_DISK_UUID}/DockerCompose/marketscanner"
+STACK_NAME="marketscanner"
+# OMV sentinel UUID used when inserting a *new* compose record via omv-rpc:
+OMV_NEW_UUID="fa4b1c66-ef79-11e5-87a0-0002b3a176b4"
 # ─────────────────────────────────────────────────────────────────────────────
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
@@ -147,15 +154,60 @@ cmd_deploy() {
         fi
         pip install --quiet -r requirements.txt
 
-        # ── 5. Docker Compose (PostgreSQL) ────────────────────────────────
-        echo '--- Ensuring PostgreSQL is running ---'
-        docker compose up -d
+        # ── 5. Docker Compose (PostgreSQL) — registered in OMV GUI ──────────
+        echo '--- Setting up MarketScanner stack in OMV Compose plugin ---'
+        # Stop old compose from /opt/MarketScanner if it was started there
+        if docker compose -f '${DEPLOY_DIR}/docker-compose.yml' ps -q 2>/dev/null | grep -q .; then
+            echo '    Stopping old stack (was started outside OMV plugin) ...'
+            docker compose -f '${DEPLOY_DIR}/docker-compose.yml' down 2>/dev/null || true
+        fi
+
+        # Place compose file in OMV watched folder
+        mkdir -p '${COMPOSE_DIR}'
+        cp '${DEPLOY_DIR}/docker-compose.yml' '${COMPOSE_DIR}/${STACK_NAME}.yml'
+        chown -R root:root '${COMPOSE_DIR}'
+        chmod 700 '${COMPOSE_DIR}'
+        chmod 600 '${COMPOSE_DIR}/${STACK_NAME}.yml'
+
+        # Register / update the stack in the OMV Compose plugin (makes it
+        # visible in Services → Compose → Docker Files in the OMV web UI)
+        EXISTING_UUID=\$(omv-rpc 'Compose' 'getFileList' '{\"start\":0,\"limit\":100}' 2>/dev/null \
+            | python3 -c \"import sys,json; data=json.load(sys.stdin); \
+              matches=[f['uuid'] for f in data['data'] if f['name']=='${STACK_NAME}']; \
+              print(matches[0] if matches else '')\" 2>/dev/null || echo '')
+        UUID=\${EXISTING_UUID:-${OMV_NEW_UUID}}
+        if [ -n "\$EXISTING_UUID" ]; then
+            echo \"    Registering stack (UUID: \$UUID, update)...\"
+        else
+            echo \"    Registering stack (UUID: \$UUID, new)...\"
+        fi
+        BODY=\$(cat '${COMPOSE_DIR}/${STACK_NAME}.yml' \
+            | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')
+        omv-rpc 'Compose' 'setFile' \"{
+            \\\"uuid\\\": \\\"\$UUID\\\",
+            \\\"name\\\": \\\"${STACK_NAME}\\\",
+            \\\"description\\\": \\\"MarketScanner — PostgreSQL signal store\\\",
+            \\\"showenv\\\": false,
+            \\\"showoverride\\\": false,
+            \\\"body\\\": \$BODY,
+            \\\"env\\\": \\\"\\\",
+            \\\"override\\\": \\\"\\\"
+        }\" > /dev/null && echo '    Stack registered in OMV GUI OK.' || \
+            echo '    WARNING: omv-rpc registration failed — stack may not appear in GUI, but will still run.'
+
+        # Start / reconcile the stack from the OMV-managed location
+        cd '${COMPOSE_DIR}'
+        docker compose -f '${STACK_NAME}.yml' up -d
+        cd '${DEPLOY_DIR}'
+
         # Wait up to 15s for DB to be ready
         for i in \$(seq 1 15); do
-            docker compose exec -T db pg_isready -U ms -d marketscanner -q && break
+            docker compose -f '${COMPOSE_DIR}/${STACK_NAME}.yml' exec -T db \
+                pg_isready -U ms -d marketscanner -q && break
             sleep 1
         done
-        docker compose exec -T db pg_isready -U ms -d marketscanner -q \
+        docker compose -f '${COMPOSE_DIR}/${STACK_NAME}.yml' exec -T db \
+            pg_isready -U ms -d marketscanner -q \
             || { echo 'ERROR: PostgreSQL did not become ready in time.'; exit 1; }
 
         # ── 6. Smoke-test DB connection ───────────────────────────────────
