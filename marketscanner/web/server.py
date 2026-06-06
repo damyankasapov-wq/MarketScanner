@@ -103,6 +103,46 @@ def index():
     return render_template_string(_INDEX_HTML, symbols=_state.get("symbols", []))
 
 
+def _no_data_png(symbol: str) -> bytes:
+    """Render a placeholder PNG shown when the feed has no data yet."""
+    import matplotlib
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(8, 3))
+    fig.patch.set_facecolor("#0f172a")
+    ax.set_facecolor("#1e293b")
+    ax.text(
+        0.5, 0.6,
+        f"{symbol}",
+        transform=ax.transAxes,
+        ha="center", va="center",
+        fontsize=22, color="#93c5fd", fontweight="bold",
+    )
+    ax.text(
+        0.5, 0.35,
+        "No data yet — market may be closed or feed not yet connected",
+        transform=ax.transAxes,
+        ha="center", va="center",
+        fontsize=10, color="#64748b",
+    )
+    ax.text(
+        0.5, 0.18,
+        "Charts populate at market open (9:30 AM ET on trading days)",
+        transform=ax.transAxes,
+        ha="center", va="center",
+        fontsize=8, color="#475569",
+    )
+    for spine in ax.spines.values():
+        spine.set_edgecolor("#334155")
+    ax.tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight", dpi=96,
+                facecolor=fig.get_facecolor())
+    plt.close(fig)
+    buf.seek(0)
+    return buf.getvalue()
+
+
 @app.route("/chart/<symbol>")
 def chart_png(symbol: str):
     symbol = symbol.upper()
@@ -117,11 +157,16 @@ def chart_png(symbol: str):
 
     df = feed.get_df(symbol)
     if df.empty:
-        # No data yet (before market open or first tick not arrived)
+        # No data yet — return a styled placeholder PNG so the browser shows
+        # something useful instead of a broken-image icon.
         return Response(
-            "No data yet — market may be closed or feed not yet connected.",
-            status=503,
-            headers={"Retry-After": "30", "Content-Type": "text/plain"},
+            _no_data_png(symbol),
+            mimetype="image/png",
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            },
         )
 
     with lock:
