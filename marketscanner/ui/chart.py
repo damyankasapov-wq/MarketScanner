@@ -166,11 +166,11 @@ def _add_local_tz_axis(
     ax2.set_xlim(ax_price.get_xlim())
     ax2.set_xticks(tick_locs)
     ax2.set_xticklabels(local_labels, fontsize=8)
-    ax2.set_xlabel(local_label, fontsize=8, labelpad=3)
+    ax2.set_xlabel(f"Local time ({local_label})", fontsize=8, labelpad=3)
 
     # Label the bottom (ET) axis for symmetry
     ax_bottom = axes[-1]
-    ax_bottom.set_xlabel("ET", fontsize=8, labelpad=3)
+    ax_bottom.set_xlabel("Market time (ET)", fontsize=8, labelpad=3)
 
     # Pull the top of the figure down slightly so the new axis label doesn't
     # overlap the chart title that mplfinance places at the top.
