@@ -96,6 +96,34 @@ def render_chart(
     # mplfinance uses integer bar positions (0, 1, 2, ...) not datetime on the x-axis.
     # axvline/axvspan must use these integer positions, not timestamps.
 
+    # shade pre-market region (bars before 9:30 ET open)
+    _session_open_idx = df_et.index[
+        (df_et.index.hour == config.ORB_START_HOUR)
+        & (df_et.index.minute == config.ORB_START_MINUTE)
+    ]
+    if not _session_open_idx.empty:
+        _open_pos = int(df_et.index.searchsorted(_session_open_idx[0]))
+        if _open_pos > 0:
+            ax.axvspan(-0.5, _open_pos - 0.5, alpha=0.06, color="gray", zorder=0)
+            ax.axvline(x=_open_pos - 0.5, color="#64748b", linestyle="--", linewidth=0.9)
+            if _open_pos >= 2:
+                ax.text(
+                    (_open_pos - 1) / 2,
+                    0.97,
+                    "pre-market",
+                    transform=ax.get_xaxis_transform(),
+                    ha="center", va="top",
+                    fontsize=7, color="#94a3b8", fontstyle="italic",
+                )
+            ax.text(
+                _open_pos - 0.5,
+                0.97,
+                "  9:30",
+                transform=ax.get_xaxis_transform(),
+                ha="left", va="top",
+                fontsize=7, color="#64748b",
+            )
+
     # shade ORB window
     if orb_mask.any():
         starts = df_et.index[orb_mask]
