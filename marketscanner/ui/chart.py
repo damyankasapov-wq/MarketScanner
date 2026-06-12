@@ -10,6 +10,8 @@ from dateutil import tz as _dateutil_tz
 
 _LOCAL_TZ = _dateutil_tz.tzlocal()   # server's OS local timezone
 
+import matplotlib.figure as _mpl_figure
+import matplotlib.backends.backend_agg as _mpl_agg
 import matplotlib.pyplot as plt
 import mplfinance as mpf
 import pandas as pd
@@ -36,7 +38,9 @@ def render_chart(
     signal_times: list of UTC datetimes where signals fired (drawn as vertical markers)
     """
     if df.empty:
-        fig, ax = plt.subplots()
+        fig = _mpl_figure.Figure()
+        _mpl_agg.FigureCanvasAgg(fig)
+        ax = fig.add_subplot(111)
         ax.text(0.5, 0.5, "No data", ha="center", va="center")
         return fig
 
@@ -48,7 +52,9 @@ def render_chart(
     df_et = _trim(df_et, signal_times)
 
     if df_et.empty:
-        fig, ax = plt.subplots()
+        fig = _mpl_figure.Figure()
+        _mpl_agg.FigureCanvasAgg(fig)
+        ax = fig.add_subplot(111)
         ax.text(0.5, 0.5, "No data in window", ha="center", va="center")
         return fig
 

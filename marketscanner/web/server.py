@@ -105,11 +105,14 @@ def index():
 
 def _no_data_png(symbol: str) -> bytes:
     """Render a placeholder PNG shown when the feed has no data yet."""
-    import matplotlib
-    import matplotlib.pyplot as plt
+    import matplotlib.figure
+    import matplotlib.backends.backend_agg as agg
 
-    fig, ax = plt.subplots(figsize=(8, 3))
+    # Use the OO API (Figure + FigureCanvasAgg) — thread-safe unlike plt.subplots()
+    fig = matplotlib.figure.Figure(figsize=(8, 3))
+    agg.FigureCanvasAgg(fig)
     fig.patch.set_facecolor("#0f172a")
+    ax = fig.add_subplot(111)
     ax.set_facecolor("#1e293b")
     ax.text(
         0.5, 0.6,
@@ -138,7 +141,6 @@ def _no_data_png(symbol: str) -> bytes:
     buf = io.BytesIO()
     fig.savefig(buf, format="png", bbox_inches="tight", dpi=96,
                 facecolor=fig.get_facecolor())
-    plt.close(fig)
     buf.seek(0)
     return buf.getvalue()
 
