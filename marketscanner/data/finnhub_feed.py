@@ -4,7 +4,10 @@ Aggregates raw trade ticks into completed 1-minute OHLCV bars.
 On each completed bar, calls on_bar(symbol, df) on the main DataFrame.
 
 Reconnects with exponential backoff (1→2→4→8→…→60s).
-After 5 consecutive failures, falls back to yfinance polling.
+Falls back to yfinance polling when:
+  - 5 consecutive WS-level exceptions, OR
+  - Finnhub sends a type:error message (expired key, rate limit, etc.), OR
+  - No trade data received for _STALE_MINUTES during market hours.
 """
 import json
 import logging
@@ -30,6 +33,11 @@ _WS_URL = f"wss://ws.finnhub.io?token={config.FINNHUB_API_KEY}"
 # Ticks arriving ≤2s after minute boundary are attributed to the closed bar
 _LATE_TICK_GRACE_S = 2
 
+# If no trade ticks arrive for this many minutes during market hours, force
+# the yfinance fallback — catches a connected-but-silent WebSocket (e.g. key
+# expired or free-tier subscription silently rejected).
+_STALE_MINUTES = 5
+
 
 class FinnhubFeed:
     def __init__(self, symbols: list[str], on_bar: OnBarCallback) -> None:
@@ -45,10 +53,14 @@ class FinnhubFeed:
         self._ws: websocket.WebSocketApp | None = None
         self._fail_count = 0
         self._stop = False
+        self._last_tick_time: float | None = None   # epoch seconds of last trade tick
+        self._use_fallback = False                  # set True to abort WS and use yfinance
         self._thread = threading.Thread(target=self._run, daemon=True)
+        self._watchdog = threading.Thread(target=self._stale_watchdog, daemon=True)
 
     def start(self) -> None:
         self._thread.start()
+        self._watchdog.start()
 
     def stop(self) -> None:
         self._stop = True
@@ -63,7 +75,7 @@ class FinnhubFeed:
 
     def _run(self) -> None:
         backoff = 1
-        while not self._stop:
+        while not self._stop and not self._use_fallback:
             try:
                 self._connect()
                 self._fail_count = 0
@@ -79,6 +91,8 @@ class FinnhubFeed:
                 log.info("Reconnecting in %ds", sleep)
                 time.sleep(sleep)
                 backoff *= 2
+        if self._use_fallback:
+            self._yfinance_fallback()
 
     def _connect(self) -> None:
         ws = websocket.WebSocketApp(
@@ -101,8 +115,20 @@ class FinnhubFeed:
             data = json.loads(message)
         except json.JSONDecodeError:
             return
-        if data.get("type") != "trade":
+        msg_type = data.get("type")
+        if msg_type == "error":
+            # Finnhub rejects the key or rate-limits via an in-band error message.
+            # The WS stays open but will never send trades — force fallback now.
+            log.error(
+                "Finnhub error message received — falling back to yfinance: %s",
+                data.get("msg", data),
+            )
+            self._use_fallback = True
+            ws.close()
             return
+        if msg_type != "trade":
+            return
+        self._last_tick_time = time.monotonic()
         for trade in data.get("data", []):
             self._ingest_tick(
                 symbol=trade["s"],
@@ -175,6 +201,43 @@ class FinnhubFeed:
         threading.Thread(
             target=self._on_bar, args=(symbol, df_snapshot), daemon=True
         ).start()
+
+    def _stale_watchdog(self) -> None:
+        """
+        Check every minute whether the WS feed is delivering data during market
+        hours. If no ticks arrive for _STALE_MINUTES while the US equity session
+        is open, force the yfinance fallback.
+        """
+        import pytz
+        et = pytz.timezone(config.TIMEZONE)
+        stale_limit = _STALE_MINUTES * 60
+        while not self._stop and not self._use_fallback:
+            time.sleep(60)
+            if self._use_fallback:
+                break
+            now_et = datetime.now(et)
+            # Only check during regular US session (09:30–16:00 ET, Mon–Fri)
+            is_weekday = now_et.weekday() < 5
+            session_open = now_et.replace(
+                hour=config.ORB_START_HOUR, minute=config.ORB_START_MINUTE,
+                second=0, microsecond=0,
+            )
+            session_close = now_et.replace(hour=16, minute=0, second=0, microsecond=0)
+            if not (is_weekday and session_open <= now_et <= session_close):
+                continue  # outside market hours — nothing to check
+            if self._last_tick_time is None:
+                elapsed = stale_limit + 1  # no tick ever received
+            else:
+                elapsed = time.monotonic() - self._last_tick_time
+            if elapsed > stale_limit:
+                log.error(
+                    "No Finnhub ticks for %.0fs during market hours — "
+                    "falling back to yfinance (check API key / subscription tier)",
+                    elapsed,
+                )
+                self._use_fallback = True
+                if self._ws:
+                    self._ws.close()
 
     def _yfinance_fallback(self) -> None:
         log.info("yfinance fallback: polling every 60s")
