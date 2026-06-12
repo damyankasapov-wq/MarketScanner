@@ -46,9 +46,16 @@ class FinnhubFeed:
         # per-symbol: list of (timestamp_s, price, volume) for current open bar
         self._ticks: Dict[str, list] = defaultdict(list)
         self._current_minute: Dict[str, int] = {}   # symbol → open bar minute (epoch // 60)
-        self._bars: Dict[str, pd.DataFrame] = {s: pd.DataFrame(
-            columns=["open", "high", "low", "close", "volume"]
-        ) for s in symbols}
+        # Initialise with explicit float64 dtypes. pandas ≥3.0 no longer upcasts
+        # when concat-ing an empty object frame with a float frame; keeping dtype
+        # correct here avoids mplfinance's np.isnan() crashing on object arrays.
+        self._bars: Dict[str, pd.DataFrame] = {
+            s: pd.DataFrame({
+                col: pd.Series(dtype="float64")
+                for col in ["open", "high", "low", "close", "volume"]
+            })
+            for s in symbols
+        }
         self._lock = threading.Lock()
         self._ws: websocket.WebSocketApp | None = None
         self._fail_count = 0
