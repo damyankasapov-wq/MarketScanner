@@ -2,6 +2,30 @@
 
 All notable changes to MarketScanner are documented here.
 
+## [0.1.3.0] - 2026-06-12
+
+### Added
+- Live candlestick chart server (Flask, port 8080) — dashboard auto-refreshes every 60 s,
+  serves per-symbol OHLCV charts as PNG; health endpoint at `/health`
+
+### Fixed
+- **QQQ/GLD showed broken images**: `plt.subplots()` is not thread-safe under concurrent
+  Flask requests; switched all chart renderers to the matplotlib OO API
+  (`Figure` + `FigureCanvasAgg`)
+- **No data / no email for a week**: Finnhub free tier connects successfully but sends no
+  trade data for US ETFs; the WS-level exception counter never reached its threshold.
+  Added in-band `type:error` message detection and a 5-minute market-hours stale-feed
+  watchdog — both trigger immediate yfinance fallback
+- **SPY placeholder styled; QQQ/GLD showed broken-image icon**: added a dark-themed
+  "No data yet" placeholder PNG rendered server-side for symbols with no feed data
+- **`addplot=None` crash**: mplfinance rejects `None` for `addplot`; kwarg is now omitted
+  when there are no overlay plots
+- **`TypeError: ufunc 'isnan' not supported`** (pandas 3.x): `pd.concat` no longer
+  upcasts empty object-dtype frames to float64; `_bars` is now initialised with explicit
+  `pd.Series(dtype="float64")` per column
+- **yfinance MultiIndex columns**: added column-flattening and explicit `astype(float)`
+  for all OHLCV columns after download
+
 ## [0.1.2.0] - 2026-06-06
 
 ### Changed
