@@ -45,8 +45,14 @@ def fetch_range(symbol: str, start: date, end: date) -> pd.DataFrame:
 
 def _normalise(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    df.columns = [c.lower() for c in df.columns]
+    # yfinance ≥0.2 may return MultiIndex columns (e.g. ("Close","SPY")) — flatten
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = [c[0].lower() for c in df.columns]
+    else:
+        df.columns = [c.lower() for c in df.columns]
     df = df[["open", "high", "low", "close", "volume"]]
+    # mplfinance requires float64; yfinance occasionally returns object or int dtypes
+    df = df.astype({"open": float, "high": float, "low": float, "close": float, "volume": float})
     if df.index.tz is None:
         df.index = df.index.tz_localize("UTC")
     else:
