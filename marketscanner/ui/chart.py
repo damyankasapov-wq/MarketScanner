@@ -77,17 +77,19 @@ def render_chart(
     orb_mask = _orb_mask(df_et)
 
     date_str = df_et.index[0].strftime("%Y-%m-%d")
-    fig, axes = mpf.plot(
-        df_et,
+    plot_kwargs: dict = dict(
         type="candle",
         style="charles",
         title=f"{market} — Opening Range Breakout  {date_str} (ET)",
         ylabel="Price",
         volume=True,
-        addplot=add_plots if add_plots else None,
         returnfig=True,
         figsize=(14, 7),
     )
+    if add_plots:
+        plot_kwargs["addplot"] = add_plots
+
+    fig, axes = mpf.plot(df_et, **plot_kwargs)
 
     ax = axes[0]
 
