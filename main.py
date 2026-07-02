@@ -68,6 +68,24 @@ _signal_history: dict[str, list] = {s: [] for s in config.MARKETS}
 
 
 def _on_bar(symbol: str, df) -> None:
+    if df.empty:
+        return
+    # Freshness guard: never act on a bar that isn't from roughly "now". The
+    # yfinance fallback (and a late process start) can hand us an entire
+    # completed session; the strategy only inspects the last bar, so it would
+    # detect a breakout on the 15:59 close and email hours later. Drop anything
+    # staler than MAX_BAR_AGE_MINUTES so alerts only fire on live bars.
+    last_ts = df.index[-1].to_pydatetime()
+    if last_ts.tzinfo is None:
+        last_ts = last_ts.replace(tzinfo=timezone.utc)
+    age = datetime.now(timezone.utc) - last_ts
+    if age > timedelta(minutes=config.MAX_BAR_AGE_MINUTES):
+        log.debug(
+            "Skipping stale bar for %s (last bar %s, age %s) — not a live tick",
+            symbol, last_ts.isoformat(), age,
+        )
+        return
+
     strategy = _strategies[symbol]
     signal = strategy.check(df, indicators={})
     if signal is None:

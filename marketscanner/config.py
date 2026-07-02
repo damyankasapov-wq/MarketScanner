@@ -34,6 +34,12 @@ EMAIL = {
 
 COOLDOWN_HOURS = 4
 
+# A bar older than this (wall-clock vs the bar's own timestamp) is treated as
+# replayed/stale and never fires an alert. Guards against the yfinance fallback
+# handing the strategy a whole completed session after hours — which would
+# "break out" on the 15:59 bar and email at, e.g., midnight.
+MAX_BAR_AGE_MINUTES = 3
+
 TIMEZONE = "America/New_York"
 
 ORB_START_HOUR   = 9
