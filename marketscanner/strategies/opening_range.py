@@ -97,6 +97,23 @@ class OpeningRangeStrategy(Strategy):
             box_bottom=self._range_low,
         )
 
+    @classmethod
+    def session_box(cls, df: pd.DataFrame) -> tuple[Optional[float], Optional[float]]:
+        """
+        Opening-range (high, low) for the session of the newest bar, computed
+        purely from the data. Used by the dashboard so the box renders from
+        whatever is being charted, independent of live strategy state — the
+        in-memory _range_high/_range_low are None after a restart or when the
+        freshness guard skips an after-hours replay, which left the chart with
+        no box lines.
+        """
+        if df.empty:
+            return None, None
+        window = df[cls._in_orb_window(df)]
+        if window.empty:
+            return None, None
+        return float(window["high"].max()), float(window["low"].min())
+
     @staticmethod
     def _in_orb_window(df: pd.DataFrame) -> pd.Series:
         et = df.index.tz_convert(_ET)
