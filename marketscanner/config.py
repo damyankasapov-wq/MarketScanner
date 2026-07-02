@@ -43,8 +43,10 @@ COOLDOWN_HOURS = 4
 # A bar older than this (wall-clock vs the bar's own timestamp) is treated as
 # replayed/stale and never fires an alert. Guards against the yfinance fallback
 # handing the strategy a whole completed session after hours — which would
-# "break out" on the 15:59 bar and email at, e.g., midnight.
-MAX_BAR_AGE_MINUTES = 3
+# "break out" on the 15:59 bar and email at, e.g., midnight. Kept generous
+# because yfinance 1-min bars can lag 1–2 min plus the poll interval; a real
+# replay is hours old, so 5 min still catches it without suppressing live bars.
+MAX_BAR_AGE_MINUTES = 5
 
 TIMEZONE = "America/New_York"
 
