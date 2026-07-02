@@ -22,6 +22,12 @@ MARKETS = {
 
 STRATEGIES = ["OpeningRange"]
 
+# Feed selection:
+#   "auto"     — Finnhub WebSocket, fall back to yfinance polling on failure/stale
+#   "yfinance" — poll yfinance directly, skip Finnhub entirely (reliable path
+#                when the Finnhub tier can't stream US ETFs)
+FEED_MODE = os.environ.get("FEED_MODE", "auto").lower()
+
 FINNHUB_API_KEY: str = os.environ["FINNHUB_API_KEY"]
 
 EMAIL = {

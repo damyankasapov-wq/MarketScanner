@@ -20,7 +20,13 @@ import threading
 
 from flask import Flask, Response, render_template_string
 
+from marketscanner import config
+
 log = logging.getLogger(__name__)
+
+# During market hours, data older than this is considered stale (a live feed
+# closes a new 1-minute bar every minute).
+_STALE_AGE_SECONDS = 300
 
 app = Flask(__name__)
 # Suppress Flask's per-request access logs — scanner log is noisy enough
@@ -203,14 +209,63 @@ def chart_png(symbol: str):
 
 @app.route("/health")
 def health():
+    """
+    Report per-symbol data freshness, not just presence. The old endpoint
+    returned {"status": "ok"} whenever the buffer was non-empty, so an 8-hour
+    frozen feed still looked healthy. Now each symbol carries the last bar's
+    timestamp and age, and the feed is flagged degraded when data goes stale
+    during market hours.
+    """
+    from datetime import datetime, timezone
+
+    import pytz
+
     symbols = _state.get("symbols", [])
     feed = _state.get("feed")
-    data_status = {}
-    if feed:
-        for sym in symbols:
-            df = feed.get_df(sym)
-            data_status[sym] = "ok" if not df.empty else "no_data"
-    return {"status": "ok", "symbols": symbols, "data": data_status}
+
+    et = pytz.timezone(config.TIMEZONE)
+    now_utc = datetime.now(timezone.utc)
+    now_et = now_utc.astimezone(et)
+    market_open = (
+        now_et.weekday() < 5
+        and (now_et.hour, now_et.minute) >= (config.ORB_START_HOUR, config.ORB_START_MINUTE)
+        and (now_et.hour, now_et.minute) < (16, 0)
+    )
+
+    data = {}
+    any_stale = False
+    for sym in symbols:
+        ts = feed.newest_bar_time(sym) if feed else None
+        if ts is None:
+            data[sym] = {"status": "no_data", "last_bar": None, "age_seconds": None}
+            if market_open:
+                any_stale = True
+            continue
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        age = (now_utc - ts).total_seconds()
+        stale = market_open and age > _STALE_AGE_SECONDS
+        if stale:
+            any_stale = True
+        data[sym] = {
+            "status": "stale" if stale else "ok",
+            "last_bar": ts.isoformat(),
+            "age_seconds": round(age),
+        }
+
+    if any_stale:
+        status = "degraded"
+    elif market_open:
+        status = "ok"
+    else:
+        status = "closed"
+
+    return {
+        "status": status,
+        "market_open": market_open,
+        "symbols": symbols,
+        "data": data,
+    }
 
 
 def start_web_server(

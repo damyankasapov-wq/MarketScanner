@@ -56,14 +56,34 @@ class FinnhubFeed:
         self._ws: websocket.WebSocketApp | None = None
         self._fail_count = 0
         self._stop = False
-        self._last_tick_time: float | None = None   # epoch seconds of last trade tick
+        self._last_tick_time: float | None = None   # monotonic time of last trade tick
+        self._last_bar_time: float | None = None    # monotonic time a bar last CLOSED
         self._use_fallback = False                  # set True to abort WS and use yfinance
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._watchdog = threading.Thread(target=self._stale_watchdog, daemon=True)
 
     def start(self) -> None:
+        if config.FEED_MODE == "yfinance":
+            # Finnhub free tier connects but streams no US-ETF trades, so the WS
+            # path just sits silent until the watchdog trips. Skip it entirely
+            # and poll yfinance from the start — the reliable path for this
+            # deployment.
+            log.info("FEED_MODE=yfinance — polling yfinance, Finnhub WS disabled")
+            self._use_fallback = True
+            threading.Thread(
+                target=self._yfinance_fallback, daemon=True, name="yfinance-feed"
+            ).start()
+            return
         self._thread.start()
         self._watchdog.start()
+
+    def newest_bar_time(self, symbol: str) -> "datetime | None":
+        """UTC timestamp of the most recent buffered bar, or None if empty."""
+        with self._lock:
+            df = self._bars.get(symbol)
+            if df is None or df.empty:
+                return None
+            return df.index[-1].to_pydatetime()
 
     def stop(self) -> None:
         self._stop = True
@@ -218,6 +238,7 @@ class FinnhubFeed:
             [self._bars[symbol], new_row]
         ).sort_index().iloc[-500:]   # keep last 500 bars in memory
         self._ticks[symbol] = []
+        self._last_bar_time = time.monotonic()
 
         df_snapshot = self._bars[symbol].copy()
         # call outside lock to avoid holding it during strategy processing
@@ -227,9 +248,13 @@ class FinnhubFeed:
 
     def _stale_watchdog(self) -> None:
         """
-        Check every minute whether the WS feed is delivering data during market
-        hours. If no ticks arrive for _STALE_MINUTES while the US equity session
-        is open, force the yfinance fallback.
+        Check every minute whether the WS feed is producing *bars* during market
+        hours. Staleness is measured against the last CLOSED bar, not the last
+        tick: Finnhub free tier can dribble occasional trades that keep a
+        tick-based timer fresh while no bar ever closes, freezing the buffer
+        (observed live — QQQ/SPY stuck at 09:40 for 8 hours). If no new bar
+        closes for _STALE_MINUTES while the session is open, force the yfinance
+        fallback, which repopulates the full day.
         """
         import pytz
         et = pytz.timezone(config.TIMEZONE)
@@ -248,13 +273,13 @@ class FinnhubFeed:
             session_close = now_et.replace(hour=16, minute=0, second=0, microsecond=0)
             if not (is_weekday and session_open <= now_et <= session_close):
                 continue  # outside market hours — nothing to check
-            if self._last_tick_time is None:
-                elapsed = stale_limit + 1  # no tick ever received
+            if self._last_bar_time is None:
+                elapsed = stale_limit + 1  # no bar ever closed
             else:
-                elapsed = time.monotonic() - self._last_tick_time
+                elapsed = time.monotonic() - self._last_bar_time
             if elapsed > stale_limit:
                 log.error(
-                    "No Finnhub ticks for %.0fs during market hours — "
+                    "No Finnhub bars for %.0fs during market hours — "
                     "falling back to yfinance (check API key / subscription tier)",
                     elapsed,
                 )
@@ -263,7 +288,7 @@ class FinnhubFeed:
                     self._ws.close()
 
     def _yfinance_fallback(self) -> None:
-        log.info("yfinance fallback: polling every 60s")
+        log.info("yfinance polling: every 60s")
         while not self._stop:
             for symbol in self._symbols:
                 try:
@@ -271,6 +296,10 @@ class FinnhubFeed:
                     if not df.empty:
                         with self._lock:
                             self._bars[symbol] = df
+                            self._last_bar_time = time.monotonic()
+                        # _on_bar applies its own freshness guard, so an
+                        # after-hours poll that returns a completed session
+                        # updates the dashboard without firing a late alert.
                         self._on_bar(symbol, df)
                 except Exception as exc:
                     log.warning("yfinance poll error for %s: %s", symbol, exc)
