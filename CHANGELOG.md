@@ -2,6 +2,15 @@
 
 All notable changes to MarketScanner are documented here.
 
+## [0.1.4.1] - 2026-07-03
+
+### Fixed
+- **Dashboard charts showed no top/bottom (opening-range) lines**: the box was read
+  from the live strategy state, which is empty after a restart or when the freshness
+  guard skips an after-hours replay. The dashboard now derives the box directly from
+  the bars being charted (`OpeningRangeStrategy.session_box`), so the top/bottom lines
+  render whenever the session's data is present.
+
 ## [0.1.4.0] - 2026-07-02
 
 ### Fixed
