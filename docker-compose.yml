@@ -29,6 +29,9 @@ services:
       # service name rather than the external hostname in .env
       DB_HOST: db
       HEADLESS: "1"
+      # Finnhub free tier connects but streams no US-ETF trades, so drive the
+      # scanner from yfinance polling. Set to "auto" to try Finnhub WS first.
+      FEED_MODE: yfinance
     ports:
       - "8080:8080"
     volumes:

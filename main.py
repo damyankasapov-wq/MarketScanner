@@ -68,6 +68,24 @@ _signal_history: dict[str, list] = {s: [] for s in config.MARKETS}
 
 
 def _on_bar(symbol: str, df) -> None:
+    if df.empty:
+        return
+    # Freshness guard: never act on a bar that isn't from roughly "now". The
+    # yfinance fallback (and a late process start) can hand us an entire
+    # completed session; the strategy only inspects the last bar, so it would
+    # detect a breakout on the 15:59 close and email hours later. Drop anything
+    # staler than MAX_BAR_AGE_MINUTES so alerts only fire on live bars.
+    last_ts = df.index[-1].to_pydatetime()
+    if last_ts.tzinfo is None:
+        last_ts = last_ts.replace(tzinfo=timezone.utc)
+    age = datetime.now(timezone.utc) - last_ts
+    if age > timedelta(minutes=config.MAX_BAR_AGE_MINUTES):
+        log.debug(
+            "Skipping stale bar for %s (last bar %s, age %s) — not a live tick",
+            symbol, last_ts.isoformat(), age,
+        )
+        return
+
     strategy = _strategies[symbol]
     signal = strategy.check(df, indicators={})
     if signal is None:
@@ -91,8 +109,8 @@ def _on_bar(symbol: str, df) -> None:
     plt.close(fig)
 
 
-def _midnight_reset() -> None:
-    """Reset strategy state machines at midnight ET each day."""
+def _midnight_reset(feed=None) -> None:
+    """Reset strategy state machines (and clear the feed buffer) at midnight ET."""
     import pytz
     et = pytz.timezone(config.TIMEZONE)
     while True:
@@ -103,12 +121,20 @@ def _midnight_reset() -> None:
             tomorrow = tomorrow + timedelta(days=1)
         sleep_s = (tomorrow - now_et).total_seconds()
         time.sleep(sleep_s)
-        log.info("Midnight reset — resetting all strategies")
-        for strategy in _strategies.values():
-            strategy.reset()
-        with _lock:
-            for symbol in _signal_history:
-                _signal_history[symbol].clear()
+        # Guard the whole reset: an unhandled exception here would kill the
+        # thread and leave every strategy stuck in its prior state forever
+        # (no more alerts until a full process restart).
+        try:
+            log.info("Midnight reset — resetting strategies and clearing feed buffer")
+            for strategy in _strategies.values():
+                strategy.reset()
+            if feed is not None:
+                feed.clear()
+            with _lock:
+                for symbol in _signal_history:
+                    _signal_history[symbol].clear()
+        except Exception:
+            log.exception("Midnight reset failed — will retry at next rollover")
 
 
 def run_live() -> None:
@@ -130,7 +156,7 @@ def run_live() -> None:
         port=web_port,
     )
 
-    threading.Thread(target=_midnight_reset, daemon=True).start()
+    threading.Thread(target=_midnight_reset, args=(feed,), daemon=True).start()
 
     if _HEADLESS:
         # Headless mode (Docker / screen / no display): keep the process alive
