@@ -21,6 +21,7 @@ import threading
 from flask import Flask, Response, render_template_string
 
 from marketscanner import config
+from marketscanner.strategies.opening_range import OpeningRangeStrategy
 
 log = logging.getLogger(__name__)
 
@@ -159,7 +160,6 @@ def chart_png(symbol: str):
 
     feed = _state["feed"]
     lock = _state["lock"]
-    strategies = _state["strategies"]
     signal_history = _state["signal_history"]
     render_chart = _state["render_chart"]
 
@@ -180,15 +180,20 @@ def chart_png(symbol: str):
     with lock:
         signals = list(signal_history.get(symbol, []))
 
-    strategy = strategies[symbol]
+    # Derive the opening-range box from the data being charted rather than the
+    # live strategy state. strategy._range_high/_range_low are None after a
+    # restart or when the freshness guard skips an after-hours replay, which
+    # left the dashboard with no box lines even though the session's ORB is
+    # fully determinable from the bars on screen.
+    box_top, box_bottom = OpeningRangeStrategy.session_box(df)
 
     # render_chart closes the figure via plt.close() before returning,
     # but the Figure object is still valid for savefig().
     fig = render_chart(
         df,
         market=symbol,
-        box_top=strategy._range_high,
-        box_bottom=strategy._range_low,
+        box_top=box_top,
+        box_bottom=box_bottom,
         signal_times=signals,
     )
 

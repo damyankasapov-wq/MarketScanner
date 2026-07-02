@@ -76,6 +76,25 @@ def test_orb_fires_with_todays_box_despite_prior_session():
     assert sig.box_bottom == pytest.approx(574.5)  # today's low, not 480
 
 
+def test_session_box_computes_from_data_not_strategy_state():
+    # The dashboard derives the box from the charted data via session_box, so it
+    # renders even when the live strategy hasn't processed the bars (restart /
+    # after-hours freshness-guard skip). Must reflect only today's ORB.
+    df = _df(PRIOR_SESSION + TODAY_ORB)
+    top, bottom = OpeningRangeStrategy.session_box(df)
+    assert top == pytest.approx(580.0)     # today's high, not the prior 620
+    assert bottom == pytest.approx(574.5)  # today's low, not the prior 480
+
+
+def test_session_box_none_when_no_orb_bars():
+    import pandas as pd
+    # empty frame → no box
+    assert OpeningRangeStrategy.session_box(pd.DataFrame()) == (None, None)
+    # only a pre-market bar (08:00 ET = 13:00 UTC) → no ORB window bars
+    premarket = _bar("2024-11-06 13:00:00+00:00", 570.0, 571.0, 569.0, 570.5)
+    assert OpeningRangeStrategy.session_box(premarket) == (None, None)
+
+
 def test_chart_trim_keeps_only_current_session():
     df = _df(PRIOR_SESSION + TODAY_ORB)
     df_et = df.copy()
