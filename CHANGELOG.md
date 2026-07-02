@@ -2,6 +2,31 @@
 
 All notable changes to MarketScanner are documented here.
 
+## [0.1.4.0] - 2026-07-02
+
+### Fixed
+- **Alerts fired at the close and arrived hours late**: the strategy only inspects the
+  latest bar, so replaying a completed session (yfinance fallback or a late process
+  start) "broke out" on the 15:59 bar and emailed at, e.g., midnight. A freshness guard
+  now drops any bar older than 5 minutes, so alerts fire only on live bars.
+- **Opening-range box lines didn't match the candles**: the ORB window matched
+  09:30–10:30 on every date in the rolling buffer, so the box high/low were computed
+  across multiple sessions and drawn as levels that didn't bracket the day's candles.
+  The window, chart, and signal markers are now scoped to the current session, and the
+  feed buffer is cleared at the ET day rollover.
+- **Dashboard charts froze mid-session**: the stale-feed watchdog measured tick recency,
+  which Finnhub free-tier trickle-trades kept fresh while no bar ever closed. It now
+  trips on bar staleness and forces the yfinance repopulate.
+- **Midnight reset could silently die**: the reset thread is guarded so an exception
+  can't leave every strategy stuck and stop all future alerts.
+
+### Added
+- `FEED_MODE` setting (`auto` | `yfinance`). docker-compose uses `yfinance` because the
+  Finnhub free tier doesn't stream US ETFs — the reliable poll becomes the primary feed
+  instead of a fallback that rarely engaged.
+- `/health` reports each symbol's last-bar timestamp and age, returning `degraded` when
+  data is stale during market hours (`closed` outside hours) instead of always `ok`.
+
 ## [0.1.3.0] - 2026-06-12
 
 ### Added
