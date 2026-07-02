@@ -50,11 +50,7 @@ class FinnhubFeed:
         # when concat-ing an empty object frame with a float frame; keeping dtype
         # correct here avoids mplfinance's np.isnan() crashing on object arrays.
         self._bars: Dict[str, pd.DataFrame] = {
-            s: pd.DataFrame({
-                col: pd.Series(dtype="float64")
-                for col in ["open", "high", "low", "close", "volume"]
-            })
-            for s in symbols
+            s: self._empty_frame() for s in symbols
         }
         self._lock = threading.Lock()
         self._ws: websocket.WebSocketApp | None = None
@@ -77,6 +73,26 @@ class FinnhubFeed:
     def get_df(self, symbol: str) -> pd.DataFrame:
         with self._lock:
             return self._bars[symbol].copy()
+
+    def clear(self) -> None:
+        """
+        Drop all buffered bars and in-progress ticks so the next session starts
+        clean. Called at the ET day rollover — without it the rolling buffer
+        carries prior-session bars into today, contaminating the opening-range
+        box (see OpeningRangeStrategy._in_orb_window).
+        """
+        with self._lock:
+            for s in self._symbols:
+                self._bars[s] = self._empty_frame()
+            self._ticks.clear()
+            self._current_minute.clear()
+
+    @staticmethod
+    def _empty_frame() -> pd.DataFrame:
+        return pd.DataFrame({
+            col: pd.Series(dtype="float64")
+            for col in ["open", "high", "low", "close", "volume"]
+        })
 
     # -- internal --
 

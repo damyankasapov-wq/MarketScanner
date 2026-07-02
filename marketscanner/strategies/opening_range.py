@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 from enum import Enum, auto
 from typing import Optional
 
@@ -100,10 +100,15 @@ class OpeningRangeStrategy(Strategy):
     @staticmethod
     def _in_orb_window(df: pd.DataFrame) -> pd.Series:
         et = df.index.tz_convert(_ET)
-        orb_start_time = et.map(lambda t: t.replace(
-            hour=config.ORB_START_HOUR, minute=config.ORB_START_MINUTE,
-            second=0, microsecond=0))
-        orb_end_time = et.map(lambda t: t.replace(
-            hour=config.ORB_END_HOUR, minute=config.ORB_END_MINUTE,
-            second=0, microsecond=0))
-        return (et >= orb_start_time) & (et < orb_end_time)
+        # Scope the opening range to the CURRENT session only — the ET date of
+        # the newest bar. The live feed keeps a rolling multi-bar buffer that
+        # can span more than one trading day; without a date bound the old
+        # per-row `t.replace(hour=...)` matched 09:30–10:30 on *every* date in
+        # the buffer, so the box high/low were computed across several sessions
+        # and drawn as levels that don't bracket today's candles.
+        session_date = et[-1].date()
+        orb_start = _ET.localize(datetime.combine(
+            session_date, time(config.ORB_START_HOUR, config.ORB_START_MINUTE)))
+        orb_end = _ET.localize(datetime.combine(
+            session_date, time(config.ORB_END_HOUR, config.ORB_END_MINUTE)))
+        return (et >= orb_start) & (et < orb_end)

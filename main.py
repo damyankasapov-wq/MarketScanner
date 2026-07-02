@@ -91,8 +91,8 @@ def _on_bar(symbol: str, df) -> None:
     plt.close(fig)
 
 
-def _midnight_reset() -> None:
-    """Reset strategy state machines at midnight ET each day."""
+def _midnight_reset(feed=None) -> None:
+    """Reset strategy state machines (and clear the feed buffer) at midnight ET."""
     import pytz
     et = pytz.timezone(config.TIMEZONE)
     while True:
@@ -103,12 +103,20 @@ def _midnight_reset() -> None:
             tomorrow = tomorrow + timedelta(days=1)
         sleep_s = (tomorrow - now_et).total_seconds()
         time.sleep(sleep_s)
-        log.info("Midnight reset — resetting all strategies")
-        for strategy in _strategies.values():
-            strategy.reset()
-        with _lock:
-            for symbol in _signal_history:
-                _signal_history[symbol].clear()
+        # Guard the whole reset: an unhandled exception here would kill the
+        # thread and leave every strategy stuck in its prior state forever
+        # (no more alerts until a full process restart).
+        try:
+            log.info("Midnight reset — resetting strategies and clearing feed buffer")
+            for strategy in _strategies.values():
+                strategy.reset()
+            if feed is not None:
+                feed.clear()
+            with _lock:
+                for symbol in _signal_history:
+                    _signal_history[symbol].clear()
+        except Exception:
+            log.exception("Midnight reset failed — will retry at next rollover")
 
 
 def run_live() -> None:
@@ -130,7 +138,7 @@ def run_live() -> None:
         port=web_port,
     )
 
-    threading.Thread(target=_midnight_reset, daemon=True).start()
+    threading.Thread(target=_midnight_reset, args=(feed,), daemon=True).start()
 
     if _HEADLESS:
         # Headless mode (Docker / screen / no display): keep the process alive

@@ -131,10 +131,15 @@ def render_chart(
         end_pos   = int(df_et.index.searchsorted(starts[-1]))
         ax.axvspan(start_pos, end_pos, alpha=0.08, color="yellow", label="ORB window")
 
-    # signal vertical lines
+    # signal vertical lines — only for signals that fall inside the visible
+    # session window. A stale prior-session signal would otherwise searchsort to
+    # position 0 and get pinned to the left edge as a phantom 09:30 breakout.
     if signal_times:
+        win_start, win_end = df_et.index[0], df_et.index[-1]
         for ts in signal_times:
             ts_et = ts.astimezone(_ET)
+            if not (win_start <= ts_et <= win_end):
+                continue
             pos = int(df_et.index.searchsorted(ts_et))
             if 0 <= pos < len(df_et):
                 ax.axvline(x=pos, color="purple", linestyle="--", linewidth=1.2)
@@ -222,30 +227,39 @@ def _add_local_tz_axis(
 
 def _trim(df_et: pd.DataFrame, signal_times: Optional[list]) -> pd.DataFrame:
     """
-    Keep bars from market open (09:30 ET) through:
+    Keep only the CURRENT session (the ET date of the newest bar), from market
+    open (09:30 ET) through:
       - last signal time + _TRAIL_BARS, if signals exist
       - last available bar, if no signals
-    Falls back to the full df if no bars fall in the window.
+    Scoping to a single date stops a rolling multi-day buffer from rendering
+    several sessions in one frame. Falls back to the full df if empty.
     """
-    # find today's session open in the index
     idx = df_et.index
-    session_open = idx[
-        (idx.hour == config.ORB_START_HOUR) & (idx.minute == config.ORB_START_MINUTE)
-    ]
-    if session_open.empty:
-        # no 09:30 bar — use first bar in df
-        start = idx[0]
-    else:
-        start = session_open[0]
+    session_date = idx[-1].date()
+    day_idx = idx[idx.date == session_date]
+    if day_idx.empty:
+        return df_et
 
-    if signal_times:
-        last_signal_et = max(ts.astimezone(_ET) for ts in signal_times)
-        # find the bar position of the signal and add trail
-        positions = (idx >= last_signal_et).argmax()
-        end_pos = min(int(positions) + _TRAIL_BARS, len(idx) - 1)
+    # session open (09:30 ET) within today's bars, else today's first bar
+    open_bars = day_idx[
+        (day_idx.hour == config.ORB_START_HOUR)
+        & (day_idx.minute == config.ORB_START_MINUTE)
+    ]
+    start = open_bars[0] if len(open_bars) else day_idx[0]
+
+    session_signals = [
+        ts.astimezone(_ET) for ts in (signal_times or [])
+        if ts.astimezone(_ET).date() == session_date
+    ]
+    if session_signals:
+        last_signal_et = max(session_signals)
+        positions = int((idx >= last_signal_et).argmax())
+        end_pos = min(positions + _TRAIL_BARS, len(idx) - 1)
         end = idx[end_pos]
+        if end.date() != session_date:
+            end = day_idx[-1]
     else:
-        end = idx[-1]
+        end = day_idx[-1]
 
     trimmed = df_et[(df_et.index >= start) & (df_et.index <= end)]
     return trimmed if not trimmed.empty else df_et
