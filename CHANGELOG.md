@@ -53,6 +53,12 @@ All notable changes to MarketScanner are documented here.
 - Tests: `test_orb_session`, `test_chart_render`, `test_email_alert`, `test_main`,
   `test_web_server`; `pytest -q` needs no network, Postgres or `.env`.
 
+### Fixed
+- **Dashboard readable on phones**: the page had no viewport meta, so a phone showed a
+  zoomed-out 980 px desktop layout. Cards now shrink to the screen width.
+- **Outcome label placement**: the `TP hit` / `SL hit` text no longer collides with the
+  right-edge level labels or gets clipped when a stop is hit near the close.
+
 ### Removed
 - The legacy interactive desktop chart window in `main.py` (headless loop only).
 - `OpeningRangeStrategy._State`, `_range_high/_range_low`, `main._signal_history`.
