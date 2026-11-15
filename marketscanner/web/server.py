@@ -54,6 +54,7 @@ _INDEX_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MarketScanner — Live Charts</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -65,7 +66,7 @@ _INDEX_HTML = """<!DOCTYPE html>
     header { display: flex; align-items: baseline; gap: 16px; margin-bottom: 24px; }
     header h1 { font-size: 1.4rem; color: #4ade80; }
     header span { font-size: 0.75rem; color: #64748b; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(580px, 1fr)); gap: 20px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(580px, 100%), 1fr)); gap: 20px; }
     .card { background: #1e293b; border-radius: 10px; overflow: hidden; }
     .card h2 {
       padding: 10px 16px; font-size: 0.9rem; color: #93c5fd;
