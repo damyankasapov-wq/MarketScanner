@@ -32,6 +32,9 @@ services:
       # Finnhub free tier connects but streams no US-ETF trades, so drive the
       # scanner from yfinance polling. Set to "auto" to try Finnhub WS first.
       FEED_MODE: yfinance
+      # Confirmation candle size in minutes (must divide 60). Every chart and
+      # the alert trigger use candles of this size.
+      CONFIRM_CANDLE_MINUTES: "5"
     ports:
       - "8080:8080"
     volumes:

@@ -1,29 +1,36 @@
 """
-Lightweight Flask web server — serves live OHLCV charts over HTTP.
+Lightweight Flask web server — serves live ORB charts over HTTP.
 
-Runs as a background daemon thread inside the scanner process.
-State (feed, strategies, signal_history) is injected at startup so it
-is shared in-process with zero IPC overhead.
+Runs as a background daemon thread inside the scanner process. The feed is
+injected at startup so it is shared in-process with zero IPC overhead.
+Everything shown is derived from `orb_session.snapshot(feed.get_df(sym))`,
+never from live strategy memory (which is empty after a restart).
 
 Endpoints:
-  GET /              HTML dashboard with all 3 symbols (auto-refreshes every 60s)
-  GET /chart/<SYM>   Current candlestick chart for SYM as PNG
-  GET /health        JSON health check
+  GET /               HTML dashboard with all symbols (auto-refreshes every 60s)
+  GET /chart/<SYM>    Current 5-minute chart for SYM as PNG
+  GET /status/<SYM>   JSON: session_date, box, proposal, outcome, candle_minutes, last_candle
+  GET /health         JSON health check
 
 Usage:
   from marketscanner.web.server import start_web_server
-  start_web_server(symbols, feed, lock, strategies, signal_history, port=8080)
+  start_web_server(symbols, feed, port=8080)
 """
 import io
 import logging
 import threading
+from datetime import datetime, timezone
 
-from flask import Flask, Response, render_template_string
+import pytz
+from flask import Flask, Response, jsonify, render_template_string
 
 from marketscanner import config
-from marketscanner.strategies.opening_range import OpeningRangeStrategy
+from marketscanner.strategies import orb_session
+from marketscanner.ui.chart import render_chart
 
 log = logging.getLogger(__name__)
+
+_ET = pytz.timezone(config.TIMEZONE)
 
 # During market hours, data older than this is considered stale (a live feed
 # closes a new 1-minute bar every minute).
@@ -36,11 +43,18 @@ logging.getLogger("werkzeug").setLevel(logging.WARNING)
 # State injected by start_web_server() — populated before the Flask thread starts.
 _state: dict = {}
 
+_NO_CACHE = {
+    "Cache-Control": "no-cache, no-store, must-revalidate",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
+
 # ── HTML dashboard ─────────────────────────────────────────────────────────────
 _INDEX_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MarketScanner — Live Charts</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -52,12 +66,18 @@ _INDEX_HTML = """<!DOCTYPE html>
     header { display: flex; align-items: baseline; gap: 16px; margin-bottom: 24px; }
     header h1 { font-size: 1.4rem; color: #4ade80; }
     header span { font-size: 0.75rem; color: #64748b; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(580px, 1fr)); gap: 20px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(580px, 100%), 1fr)); gap: 20px; }
     .card { background: #1e293b; border-radius: 10px; overflow: hidden; }
     .card h2 {
       padding: 10px 16px; font-size: 0.9rem; color: #93c5fd;
       border-bottom: 1px solid #334155;
     }
+    .card .status {
+      padding: 6px 16px; font-size: 0.8rem; color: #cbd5e1;
+      border-bottom: 1px solid #334155; min-height: 1.9em;
+    }
+    .card .status.buy { color: #4ade80; }
+    .card .status.sell { color: #f87171; }
     .card img {
       display: block; width: 100%; height: auto;
       background: #0f172a;
@@ -74,13 +94,14 @@ _INDEX_HTML = """<!DOCTYPE html>
     {% for sym in symbols %}
     <div class="card">
       <h2>{{ sym }} — Opening Range Breakout</h2>
+      <p class="status" id="status-{{ sym }}">…</p>
       <img id="img-{{ sym }}" src="/chart/{{ sym }}" alt="{{ sym }} chart"
            onerror="this.style.opacity='0.3'">
     </div>
     {% endfor %}
   </div>
-  <p class="footer">Charts refresh every 60 s &nbsp;|&nbsp;
-    <a href="/health" style="color:#60a5fa">health</a>
+  <p class="footer">Charts refresh every 60 s &nbsp;|&nbsp; informational only — not an order
+    &nbsp;|&nbsp; <a href="/health" style="color:#60a5fa">health</a>
   </p>
   <script>
     function pad(n) { return String(n).padStart(2, '0'); }
@@ -90,15 +111,28 @@ _INDEX_HTML = """<!DOCTYPE html>
              pad(d.getMonth()+1) + '-' + pad(d.getDate()) + ' ' +
              pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
     }
+    function refreshStatus() {
+      document.querySelectorAll('p[id^="status-"]').forEach(p => {
+        const sym = p.id.slice(7);
+        fetch('/status/' + sym + '?t=' + Date.now())
+          .then(r => r.json())
+          .then(s => {
+            p.textContent = s.status_line;
+            p.className = 'status' + (s.proposal ? ' ' + s.proposal.side.toLowerCase() : '');
+          })
+          .catch(() => { p.textContent = 'status unavailable'; });
+      });
+    }
     function refresh() {
       document.querySelectorAll('img[id^="img-"]').forEach(img => {
         const base = img.src.split('?')[0];
         img.src = base + '?t=' + Date.now();
       });
+      refreshStatus();
       document.getElementById('ts').textContent = 'last refresh: ' + ts();
     }
-    // Initial timestamp
     document.getElementById('ts').textContent = 'loaded: ' + ts();
+    refreshStatus();
     setInterval(refresh, 60000);
   </script>
 </body>
@@ -152,85 +186,102 @@ def _no_data_png(symbol: str) -> bytes:
     return buf.getvalue()
 
 
+def _snapshot_for(symbol: str) -> orb_session.OrbSnapshot:
+    df = _state["feed"].get_df(symbol)
+    return orb_session.snapshot(df, now=datetime.now(timezone.utc))
+
+
 @app.route("/chart/<symbol>")
 def chart_png(symbol: str):
     symbol = symbol.upper()
     if symbol not in _state.get("symbols", []):
         return Response(f"Unknown symbol: {symbol}", status=404)
 
-    feed = _state["feed"]
-    lock = _state["lock"]
-    signal_history = _state["signal_history"]
-    render_chart = _state["render_chart"]
-
-    df = feed.get_df(symbol)
+    df = _state["feed"].get_df(symbol)
     if df.empty:
         # No data yet — return a styled placeholder PNG so the browser shows
         # something useful instead of a broken-image icon.
-        return Response(
-            _no_data_png(symbol),
-            mimetype="image/png",
-            headers={
-                "Cache-Control": "no-cache, no-store, must-revalidate",
-                "Pragma": "no-cache",
-                "Expires": "0",
-            },
-        )
+        return Response(_no_data_png(symbol), mimetype="image/png", headers=_NO_CACHE)
 
-    with lock:
-        signals = list(signal_history.get(symbol, []))
-
-    # Derive the opening-range box from the data being charted rather than the
-    # live strategy state. strategy._range_high/_range_low are None after a
-    # restart or when the freshness guard skips an after-hours replay, which
-    # left the dashboard with no box lines even though the session's ORB is
-    # fully determinable from the bars on screen.
-    box_top, box_bottom = OpeningRangeStrategy.session_box(df)
-
-    # render_chart closes the figure via plt.close() before returning,
-    # but the Figure object is still valid for savefig().
-    fig = render_chart(
-        df,
-        market=symbol,
-        box_top=box_top,
-        box_bottom=box_bottom,
-        signal_times=signals,
-    )
+    snap = orb_session.snapshot(df, now=datetime.now(timezone.utc))
+    fig = render_chart(snap, market=symbol)
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", bbox_inches="tight", dpi=100)
     buf.seek(0)
+    return Response(buf.getvalue(), mimetype="image/png", headers=_NO_CACHE)
 
-    return Response(
-        buf.getvalue(),
-        mimetype="image/png",
-        headers={
-            "Cache-Control": "no-cache, no-store, must-revalidate",
-            "Pragma": "no-cache",
-            "Expires": "0",
-        },
-    )
+
+def status_line(snap: orb_session.OrbSnapshot) -> str:
+    """One-line card status: proposal numbers and where the trade stands."""
+    if snap.box is None:
+        return "waiting for market open" if snap.session_date is None else "building range"
+    if snap.proposal is None:
+        if snap.box.delta <= 0:
+            return "flat opening range — no proposal"
+        return f"waiting for confirmation · box {snap.box.bottom:.2f}–{snap.box.top:.2f}"
+    p = snap.proposal
+    line = f"{p.side} {p.entry:.2f} · TP {p.take_profit:.2f} · SL {p.stop_loss:.2f}"
+    o = snap.outcome
+    if o is None or o.status == "OPEN":
+        return line + " · open"
+    hit = "TP hit" if o.status == "TP_HIT" else "SL hit"
+    return f"{line} · {hit} {o.exit_ts.astimezone(_ET):%H:%M} ({o.r_multiple:+.0f}R)"
+
+
+def status_payload(snap: orb_session.OrbSnapshot) -> dict:
+    iso = lambda ts: None if ts is None else ts.isoformat()
+    last_candle = None if snap.candles.empty else snap.candles.index[-1].isoformat()
+    box = None if snap.box is None else {
+        "top": snap.box.top, "bottom": snap.box.bottom, "delta": snap.box.delta}
+    proposal = None if snap.proposal is None else {
+        "side": snap.proposal.side,
+        "entry": snap.proposal.entry,
+        "take_profit": snap.proposal.take_profit,
+        "stop_loss": snap.proposal.stop_loss,
+        "delta": snap.proposal.delta,
+        "confirm_open": iso(snap.confirmation.candle_open),
+        "confirm_close": iso(snap.confirmation.candle_close),
+    }
+    outcome = None if snap.outcome is None else {
+        "status": snap.outcome.status,
+        "exit_ts": iso(snap.outcome.exit_ts),
+        "exit_price": snap.outcome.exit_price,
+        "r_multiple": snap.outcome.r_multiple,
+    }
+    return {
+        "session_date": iso(snap.session_date),
+        "candle_minutes": snap.candle_minutes,
+        "last_candle": last_candle,
+        "box": box,
+        "proposal": proposal,
+        "outcome": outcome,
+        "status_line": status_line(snap),
+    }
+
+
+@app.route("/status/<symbol>")
+def status(symbol: str):
+    symbol = symbol.upper()
+    if symbol not in _state.get("symbols", []):
+        return Response(f"Unknown symbol: {symbol}", status=404)
+    resp = jsonify(status_payload(_snapshot_for(symbol)))
+    resp.headers.update(_NO_CACHE)
+    return resp
 
 
 @app.route("/health")
 def health():
     """
-    Report per-symbol data freshness, not just presence. The old endpoint
-    returned {"status": "ok"} whenever the buffer was non-empty, so an 8-hour
-    frozen feed still looked healthy. Now each symbol carries the last bar's
-    timestamp and age, and the feed is flagged degraded when data goes stale
-    during market hours.
+    Report per-symbol data freshness, not just presence. Each symbol carries
+    the last bar's timestamp and age, and the feed is flagged degraded when
+    data goes stale during market hours.
     """
-    from datetime import datetime, timezone
-
-    import pytz
-
     symbols = _state.get("symbols", [])
     feed = _state.get("feed")
 
-    et = pytz.timezone(config.TIMEZONE)
     now_utc = datetime.now(timezone.utc)
-    now_et = now_utc.astimezone(et)
+    now_et = now_utc.astimezone(_ET)
     market_open = (
         now_et.weekday() < 5
         and (now_et.hour, now_et.minute) >= (config.ORB_START_HOUR, config.ORB_START_MINUTE)
@@ -273,27 +324,12 @@ def health():
     }
 
 
-def start_web_server(
-    symbols: list,
-    feed,
-    lock: "threading.Lock",
-    strategies: dict,
-    signal_history: dict,
-    render_chart_fn,
-    port: int = 8080,
-) -> threading.Thread:
+def start_web_server(symbols: list, feed, port: int = 8080) -> threading.Thread:
     """
     Inject live state and start Flask in a background daemon thread.
     Returns immediately; Flask keeps running until the process exits.
     """
-    _state.update({
-        "symbols": symbols,
-        "feed": feed,
-        "lock": lock,
-        "strategies": strategies,
-        "signal_history": signal_history,
-        "render_chart": render_chart_fn,
-    })
+    _state.update({"symbols": symbols, "feed": feed})
 
     t = threading.Thread(
         target=lambda: app.run(
