@@ -180,16 +180,24 @@ def render_chart(snapshot: OrbSnapshot, market: str) -> Figure:
 
             if resolved and exit_pos is not None:
                 hit_et = pd.Timestamp(outcome.exit_ts).tz_convert(_ET).strftime("%H:%M")
+                # Keep the outcome label clear of the right-edge level labels
+                # (which sit just above their lines) and inside the axes: push
+                # it well above TP / below SL, and anchor it inward near either
+                # edge so a 15:59 stop is not clipped at the frame.
+                gap = max(prop.delta * 0.22, (y_hi - y_lo) * 0.06)
+                ha = "right" if exit_pos > n - 7 else ("left" if exit_pos < 6 else "center")
                 if outcome.status == "TP_HIT":
                     ax.plot(exit_pos, tp, marker="v", markersize=11, color=_TP, zorder=5)
-                    ax.text(exit_pos, tp + prop.delta * 0.08, f"TP hit {hit_et}  +1R",
-                            ha="center", va="bottom", fontsize=8, fontweight="bold", color=_TP,
+                    ax.text(exit_pos, tp + gap, f"TP hit {hit_et}  +1R",
+                            ha=ha, va="bottom", fontsize=8, fontweight="bold", color=_TP,
                             bbox=_PILL, zorder=6)
+                    y_hi = max(y_hi, tp + gap)
                 else:
                     ax.plot(exit_pos, sl, marker="^", markersize=11, color=_SL, zorder=5)
-                    ax.text(exit_pos, sl - prop.delta * 0.08, f"SL hit {hit_et}  −1R",
-                            ha="center", va="top", fontsize=8, fontweight="bold", color=_SL,
+                    ax.text(exit_pos, sl - gap, f"SL hit {hit_et}  −1R",
+                            ha=ha, va="top", fontsize=8, fontweight="bold", color=_SL,
                             bbox=_PILL, zorder=6)
+                    y_lo = min(y_lo, sl - gap)
 
     # limits: labels never overlap the right-most candles; levels above/below
     # the candle range stay visible
