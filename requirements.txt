@@ -10,3 +10,4 @@ matplotlib>=3.8.0
 pandas-market-calendars>=4.4.0
 pytz>=2024.1
 flask>=3.0.0
+six>=1.16.0  # mplfinance imports six; python-dateutil 4.x no longer pulls it in
