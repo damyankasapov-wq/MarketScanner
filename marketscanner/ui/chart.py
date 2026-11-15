@@ -225,7 +225,7 @@ def _add_local_tz_axis(
     fig.subplots_adjust(top=max(top - 0.04, 0.80))
 
 
-def _trim(df_et: pd.DataFrame, signal_times: Optional[list]) -> pd.DataFrame:
+def _trim(df_et: pd.DataFrame, signal_times: Optional[list] = None) -> pd.DataFrame:
     """
     Keep only the CURRENT session (the ET date of the newest bar), from market
     open (09:30 ET) through:

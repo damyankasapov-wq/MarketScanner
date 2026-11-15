@@ -1,131 +1,105 @@
-from datetime import datetime, time, timezone
-from enum import Enum, auto
+"""
+Opening Range Breakout strategy.
+
+All maths lives in the pure module `orb_session`; this class only decides
+*whether to alert* on a snapshot: once per symbol per session, and only when
+the confirmation candle is fresh enough that the alert is still actionable.
+"""
+import logging
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 import pandas as pd
 import pytz
 
 from marketscanner import config
+from marketscanner.strategies import orb_session
 from marketscanner.strategies.base import Signal, Strategy
 
 _ET = pytz.timezone(config.TIMEZONE)
-
-
-class _State(Enum):
-    IDLE = auto()       # before 09:30 ET
-    BUILDING = auto()   # 09:30–10:30 ET — accumulating range
-    WATCHING = auto()   # after 10:30 ET — waiting for breakout
-    FIRED = auto()      # signal emitted; cooldown active
+log = logging.getLogger(__name__)
 
 
 class OpeningRangeStrategy(Strategy):
     def __init__(self, market: str) -> None:
         self.market = market
-        self._state = _State.IDLE
-        self._range_high: Optional[float] = None
-        self._range_low: Optional[float] = None
+        # The only per-symbol state: the session we already alerted (or refused)
+        # on, and the session we already warned about a flat first hour.
+        self._fired_session: Optional[date] = None
+        self._warned_flat_session: Optional[date] = None
 
-    def check(self, df: pd.DataFrame, indicators: dict) -> Optional[Signal]:
+    def check(
+        self, df: pd.DataFrame, indicators: dict, now: Optional[datetime] = None
+    ) -> Optional[Signal]:
         if df.empty:
             return None
+        if now is None:
+            now = datetime.now(timezone.utc)
 
-        last = df.iloc[-1]
-        ts_utc: datetime = last.name.to_pydatetime().replace(tzinfo=timezone.utc)
-        ts_et: datetime = ts_utc.astimezone(_ET)
+        snap = orb_session.snapshot(df, now=now)
+        if snap.box is None:
+            return None
+        if self._fired_session == snap.session_date:
+            return None   # one signal per symbol per day
 
-        h, m = ts_et.hour, ts_et.minute
-
-        orb_start = (config.ORB_START_HOUR, config.ORB_START_MINUTE)
-        orb_end   = (config.ORB_END_HOUR,   config.ORB_END_MINUTE)
-
-        if self._state == _State.FIRED:
+        if snap.box.delta <= 0:
+            if self._warned_flat_session != snap.session_date:
+                log.warning(
+                    "%s: flat opening range on %s (top == bottom == %.2f) — no proposal today",
+                    self.market, snap.session_date, snap.box.top,
+                )
+                self._warned_flat_session = snap.session_date
+            return None
+        if snap.proposal is None:
             return None
 
-        # Transition: IDLE → BUILDING at 09:30
-        if self._state == _State.IDLE:
-            if (h, m) >= orb_start:
-                self._state = _State.BUILDING
-            else:
-                return None
+        conf = snap.confirmation
+        newest = pd.Timestamp(df.index[-1])
+        newest = newest.tz_localize("UTC") if newest.tzinfo is None else newest.tz_convert("UTC")
+        lateness = newest.to_pydatetime() - conf.candle_close
+        if lateness > timedelta(minutes=config.CONFIRM_MAX_LATENESS_MINUTES):
+            # A stale confirmation (mid-day restart, long feed outage) is never
+            # alerted. The refusal is final for the session: find_confirmation
+            # would return this same first candle on every later poll.
+            self._fired_session = snap.session_date
+            log.info(
+                "%s: confirmation %s refused as stale (newest bar %s, %s late) — no alert today",
+                self.market,
+                conf.candle_open.astimezone(_ET).strftime("%H:%M"),
+                newest.tz_convert(_ET).strftime("%H:%M"),
+                lateness,
+            )
+            return None
 
-        # Transition: BUILDING → WATCHING at 10:30
-        if self._state == _State.BUILDING:
-            if (h, m) < orb_end:
-                # still inside window — extend range
-                window = df[self._in_orb_window(df)]
-                if not window.empty:
-                    self._range_high = float(window["high"].max())
-                    self._range_low  = float(window["low"].min())
-                return None
-            else:
-                # just crossed 10:30 — finalise box
-                window = df[self._in_orb_window(df)]
-                if window.empty:
-                    # incomplete — no data during window; stay IDLE
-                    self._state = _State.IDLE
-                    return None
-                self._range_high = float(window["high"].max())
-                self._range_low  = float(window["low"].min())
-                self._state = _State.WATCHING
-
-        # WATCHING — check close against box
-        if self._state == _State.WATCHING:
-            close = float(last["close"])
-            if close > self._range_high:
-                return self._fire("UP", close, ts_utc)
-            if close < self._range_low:
-                return self._fire("DOWN", close, ts_utc)
-
-        return None
-
-    def reset(self) -> None:
-        self._state = _State.IDLE
-        self._range_high = None
-        self._range_low = None
-
-    # -- helpers --
-
-    def _fire(self, direction: str, price: float, ts_utc: datetime) -> Signal:
-        self._state = _State.FIRED
+        self._fired_session = snap.session_date
+        prop = snap.proposal
         return Signal(
             market=self.market,
             strategy="OpeningRange",
-            direction=direction,
-            price=price,
-            fired_at=ts_utc,
-            box_top=self._range_high,
-            box_bottom=self._range_low,
+            direction=conf.direction,
+            price=prop.entry,
+            fired_at=now,
+            box_top=snap.box.top,
+            box_bottom=snap.box.bottom,
+            side=prop.side,
+            entry=prop.entry,
+            take_profit=prop.take_profit,
+            stop_loss=prop.stop_loss,
+            delta=prop.delta,
+            confirm_open=conf.candle_open,
+            confirm_close=conf.candle_close,
+            candle_minutes=snap.candle_minutes,
+            session_date=snap.session_date,
         )
+
+    def reset(self) -> None:
+        self._fired_session = None
+        self._warned_flat_session = None
 
     @classmethod
     def session_box(cls, df: pd.DataFrame) -> tuple[Optional[float], Optional[float]]:
-        """
-        Opening-range (high, low) for the session of the newest bar, computed
-        purely from the data. Used by the dashboard so the box renders from
-        whatever is being charted, independent of live strategy state — the
-        in-memory _range_high/_range_low are None after a restart or when the
-        freshness guard skips an after-hours replay, which left the chart with
-        no box lines.
-        """
-        if df.empty:
+        """Thin alias for orb_session.session_box, kept for one release."""
+        box = orb_session.session_box(df)
+        if box is None:
             return None, None
-        window = df[cls._in_orb_window(df)]
-        if window.empty:
-            return None, None
-        return float(window["high"].max()), float(window["low"].min())
-
-    @staticmethod
-    def _in_orb_window(df: pd.DataFrame) -> pd.Series:
-        et = df.index.tz_convert(_ET)
-        # Scope the opening range to the CURRENT session only — the ET date of
-        # the newest bar. The live feed keeps a rolling multi-bar buffer that
-        # can span more than one trading day; without a date bound the old
-        # per-row `t.replace(hour=...)` matched 09:30–10:30 on *every* date in
-        # the buffer, so the box high/low were computed across several sessions
-        # and drawn as levels that don't bracket today's candles.
-        session_date = et[-1].date()
-        orb_start = _ET.localize(datetime.combine(
-            session_date, time(config.ORB_START_HOUR, config.ORB_START_MINUTE)))
-        orb_end = _ET.localize(datetime.combine(
-            session_date, time(config.ORB_END_HOUR, config.ORB_END_MINUTE)))
-        return (et >= orb_start) & (et < orb_end)
+        return box.top, box.bottom

@@ -19,66 +19,11 @@ from marketscanner.strategies.orb_session import (
 )
 
 
-# ── fixture helpers ──────────────────────────────────────────────────────────
-
-def _bar(dt_str, o, h, l, c, v=1_000.0):
-    ts = pd.Timestamp(dt_str)
-    ts = ts.tz_localize("UTC") if ts.tzinfo is None else ts.tz_convert("UTC")
-    return pd.DataFrame(
-        [{"open": float(o), "high": float(h), "low": float(l), "close": float(c), "volume": float(v)}],
-        index=pd.DatetimeIndex([ts], tz="UTC"),
-    )
-
-
-def _df(bars):
-    return pd.concat(bars).sort_index()
-
-
-def _flat(start, n, price=579.0, step_min=1):
-    """n consecutive 1-minute bars from start, all o=h=l=c=price."""
-    t0 = pd.Timestamp(start, tz="UTC")
-    return [_bar(t0 + pd.Timedelta(minutes=i * step_min), price, price, price, price) for i in range(n)]
-
-
-def _candle_bars(start, o, h, l, c):
-    """
-    Five 1-minute bars whose 5-minute aggregate is exactly O/H/L/C = o/h/l/c
-    (first open, max high, min low, last close). Requires l <= o, c <= h.
-    """
-    t0 = pd.Timestamp(start, tz="UTC")
-    m = lambda i: t0 + pd.Timedelta(minutes=i)
-    return [
-        _bar(m(0), o, o, o, o),
-        _bar(m(1), o, h, o, h),
-        _bar(m(2), h, h, l, l),
-        _bar(m(3), l, l, l, l),
-        _bar(m(4), l, max(l, c), l, c),
-    ]
-
-
-# Opening range for 2024-11-06: box top 580.00, bottom 574.50 (delta 5.50)
-ORB_BARS = [
-    _bar("2024-11-06 14:30:00+00:00", 575.00, 578.00, 574.50, 577.00),  # 09:30 ET
-    _bar("2024-11-06 14:31:00+00:00", 577.00, 579.50, 576.00, 578.00),  # 09:31 ET
-    _bar("2024-11-06 15:29:00+00:00", 578.00, 580.00, 577.00, 579.00),  # 10:29 ET
-]
-BOX = Box(top=580.00, bottom=574.50)
-
-# 10:30-10:35 ET candles (bucket start 15:30 UTC)
-C_WICK_INSIDE = _candle_bars("2024-11-06 15:30", 580.2, 581.0, 579.8, 580.8)   # close out, low in
-C_RED_ABOVE   = _candle_bars("2024-11-06 15:30", 581.0, 581.5, 580.5, 580.6)   # fully above, red
-C_GREEN_ABOVE = _candle_bars("2024-11-06 15:30", 580.5, 581.5, 580.2, 581.2)   # fully above, green
-C_RED_BELOW   = _candle_bars("2024-11-06 15:30", 574.0, 574.4, 573.0, 573.2)   # fully below, red
-C_GREEN_ABOVE_2 = _candle_bars("2024-11-06 15:35", 581.3, 582.5, 581.1, 582.0)
-TRAIL = [_bar("2024-11-06 15:35:00+00:00", 581.2, 581.3, 581.1, 581.2)]        # proves 15:30 bucket complete
-TRAIL_2 = [_bar("2024-11-06 15:40:00+00:00", 582.0, 582.1, 581.9, 582.0)]
-
-CONF_UP = Confirmation(
-    candle_open=datetime(2024, 11, 6, 15, 30, tzinfo=timezone.utc),
-    candle_close=datetime(2024, 11, 6, 15, 35, tzinfo=timezone.utc),
-    direction="UP", open=580.5, high=581.5, low=580.2, close=581.2,
+from tests.orb_fixtures import (
+    BOX, C_GREEN_ABOVE, C_GREEN_ABOVE_2, C_RED_ABOVE, C_RED_BELOW, C_WICK_INSIDE,
+    CONF_UP, ORB_BARS, PROP_BUY, TRAIL, TRAIL_2,
+    bar as _bar, candle_bars as _candle_bars, df_of as _df, flat as _flat,
 )
-PROP_BUY = Proposal("BUY", 581.2, 586.7, 575.7, 5.5)
 
 
 # ── session_slice ────────────────────────────────────────────────────────────
