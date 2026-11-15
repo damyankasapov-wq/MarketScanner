@@ -2,6 +2,62 @@
 
 All notable changes to MarketScanner are documented here.
 
+## [0.2.0.0] - 2026-11-15
+
+### Changed
+- **Alert trigger**: an alert now needs a *completed* 5-minute candle whose whole range
+  (wicks included) sits outside the 09:30–10:30 ET opening range and that closes in the
+  breakout direction (green above the top, red below the bottom). A 1-minute close a few
+  cents outside the box no longer fires. Candle size is `CONFIRM_CANDLE_MINUTES` (must
+  divide 60); a bucket counts as complete only when a later 1-minute bar exists or the
+  clock is past its end plus `CANDLE_GRACE_SECONDS`, so the in-progress yfinance minute
+  never confirms.
+- **Every chart (email, dashboard, replay) uses 5-minute candles** and draws the orange
+  first-hour box, dashed box-top/bottom lines with price labels, and states the candle
+  size in the title.
+- **One definition of every number**: box, candles, confirmation, proposal and outcome
+  are computed by the new pure module `marketscanner/strategies/orb_session.py`
+  (`snapshot(df_1m, now)`) from 1-minute bars alone; the strategy, dashboard, email and
+  replay all read that snapshot, so the picture survives restarts by construction.
+- **Lateness rule**: a confirmation older than `CONFIRM_MAX_LATENESS_MINUTES` (default
+  2 × candle size) when first seen — a mid-day restart replaying an hours-old breakout —
+  is refused and the session is latched, with one INFO line. A missed poll or two still
+  fires. The dashboard still draws the refused proposal.
+- `python main.py --backtest SYMBOL` is now an alias for `--replay SYMBOL <today>`.
+- `render_chart(snapshot, market)` replaces `render_chart(df, market, box_top, …)`; the
+  renderer is pyplot-free (OO matplotlib, mplfinance external-axes mode).
+- `start_web_server(symbols, feed, port)` — the dashboard no longer needs strategies,
+  the lock or the signal history.
+
+### Added
+- **Trade proposal in the alert** (informational only — nothing trades): BUY above /
+  SELL below, entry = confirmation close, take profit and stop loss one box-width away
+  (fixed 1:1). Subject `[MarketScanner] SPY ORB BUY @ 583.90 · TP 585.85 · SL 581.95`;
+  body table with side, entry, TP, SL, range delta, risk/reward, confirmation candle
+  (time, size, OHLC), box top/bottom and time sent, identical in plain text and HTML.
+- **Position overlays on every chart**: green zone entry→TP and red zone entry→SL from
+  the confirmation candle, dashed TP and SL levels, `BUY @ price` annotation.
+- **Outcome marker**: the 1-minute bars after the confirmation are walked for a TP or SL
+  touch (both in one bar counts as SL); a green ▼ `TP hit hh:mm +1R` or red ▲
+  `SL hit hh:mm −1R` is drawn on the exit candle and the zones end there.
+- `python main.py --replay SYMBOL YYYY-MM-DD` renders any session of the last ~30 days to
+  `output/replay/replay_SYMBOL_DATE.png` and logs box, confirmation, proposal and outcome.
+- `/status/<SYM>` JSON (session date, box, proposal, outcome, candle size, last candle)
+  and a per-card status line on the dashboard (`BUY 583.90 · TP 585.85 · SL 581.95 ·
+  open` / `· TP hit 11:05 (+1R)` / `waiting for confirmation` / `building range`).
+- `signals` table gains `session_date, side, entry, take_profit, stop_loss, delta,
+  confirm_open, confirm_close, candle_minutes` (additive `ALTER TABLE … IF NOT EXISTS`
+  at startup); `store.signal_exists` stops a restart after the 4-hour cooldown from
+  emailing the same session twice.
+- Config: `CONFIRM_CANDLE_MINUTES`, `CANDLE_GRACE_SECONDS`, `CONFIRM_MAX_LATENESS_MINUTES`.
+- Tests: `test_orb_session`, `test_chart_render`, `test_email_alert`, `test_main`,
+  `test_web_server`; `pytest -q` needs no network, Postgres or `.env`.
+
+### Removed
+- The legacy interactive desktop chart window in `main.py` (headless loop only).
+- `OpeningRangeStrategy._State`, `_range_high/_range_low`, `main._signal_history`.
+  `OpeningRangeStrategy.session_box` stays as a thin alias for one release.
+
 ## [0.1.4.1] - 2026-07-03
 
 ### Fixed

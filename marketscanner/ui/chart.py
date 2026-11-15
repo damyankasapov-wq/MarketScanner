@@ -79,8 +79,10 @@ def render_chart(snapshot: OrbSnapshot, market: str) -> Figure:
     ax_vol = fig.add_subplot(gs[1], sharex=ax)
 
     # 1. candles + volume
+    # volume_exponent=0: plain tick values; mplfinance skips its "x 10^6"
+    # label in external-axes mode, so scaled ticks would read as 1, 2, 3.
     mpf.plot(df_et, type="candle", style=_STYLE, ax=ax, volume=ax_vol,
-             warn_too_much_data=100_000)
+             volume_exponent=0, warn_too_much_data=100_000)
     ax.set_ylabel("Price")
     ax_vol.set_ylabel("Volume")
     ax.tick_params(axis="x", labelbottom=False)
