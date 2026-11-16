@@ -33,6 +33,7 @@ from marketscanner.state.store import (
     init_db, is_on_cooldown, log_signal, set_cooldown, signal_exists,
 )
 from marketscanner.strategies import orb_session
+from marketscanner.strategies.orb_session import replay_now
 from marketscanner.strategies.opening_range import OpeningRangeStrategy
 from marketscanner.ui.chart import render_chart
 from marketscanner.web.server import start_web_server
@@ -120,6 +121,11 @@ def _midnight_reset(feed=None) -> None:
 
 
 def run_live() -> None:
+    if config.FEED_MODE != "yfinance" and not config.FINNHUB_API_KEY:
+        raise RuntimeError(
+            f"FEED_MODE={config.FEED_MODE!r} needs FINNHUB_API_KEY, which is not set. "
+            "Set the key in .env, or set FEED_MODE=yfinance to poll yfinance only."
+        )
     init_db()
     symbols = list(config.MARKETS.keys())
     feed = FinnhubFeed(symbols=symbols, on_bar=_on_bar)
@@ -135,15 +141,6 @@ def run_live() -> None:
     # Keep the process alive; email alerts and the dashboard carry the charts.
     while True:
         time.sleep(60)
-
-
-def replay_now(session_date: date) -> datetime:
-    """
-    The `now` for a replayed session: 16:00 ET plus the candle grace, in UTC,
-    so the day's last candle (15:55) counts as complete.
-    """
-    close_et = _ET.localize(datetime.combine(session_date, datetime.min.time()).replace(hour=16))
-    return (close_et + timedelta(seconds=config.CANDLE_GRACE_SECONDS)).astimezone(timezone.utc)
 
 
 def run_replay(symbol: str, session_date: date, fetch=fetch_range) -> Optional[Path]:
