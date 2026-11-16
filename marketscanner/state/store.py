@@ -1,3 +1,4 @@
+import re
 from datetime import date, datetime, timedelta, timezone
 
 import psycopg2
@@ -5,6 +6,32 @@ import psycopg2.pool
 
 from marketscanner import config
 from marketscanner.strategies.base import Signal
+
+_TABLE_RE = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
+
+
+def bars_ddl(table: str = "bars") -> str:
+    """
+    DDL for the 1-minute bars archive (additive, idempotent). One row per symbol
+    per minute, keyed (symbol, ts); prices stored to 4 decimals, which removes the
+    float32 noise in the vendor data. `table` is validated because it is
+    interpolated (the opt-in integration test uses a throwaway table).
+    """
+    if not _TABLE_RE.match(table):
+        raise ValueError(f"invalid table name: {table!r}")
+    return f"""
+CREATE TABLE IF NOT EXISTS {table} (
+    symbol VARCHAR(20)      NOT NULL,
+    ts     TIMESTAMPTZ      NOT NULL,
+    open   NUMERIC(12,4)    NOT NULL,
+    high   NUMERIC(12,4)    NOT NULL,
+    low    NUMERIC(12,4)    NOT NULL,
+    close  NUMERIC(12,4)    NOT NULL,
+    volume DOUBLE PRECISION NOT NULL DEFAULT 0,
+    PRIMARY KEY (symbol, ts)
+);
+"""
+
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS cooldowns (
@@ -38,7 +65,7 @@ ALTER TABLE signals ADD COLUMN IF NOT EXISTS delta          NUMERIC(12,4);
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS confirm_open   TIMESTAMPTZ;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS confirm_close  TIMESTAMPTZ;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS candle_minutes SMALLINT;
-"""
+""" + bars_ddl()
 
 _pool: psycopg2.pool.SimpleConnectionPool | None = None
 
@@ -46,7 +73,7 @@ _pool: psycopg2.pool.SimpleConnectionPool | None = None
 def _get_conn():
     global _pool
     if _pool is None:
-        _pool = psycopg2.pool.SimpleConnectionPool(1, 3, **config.DB)
+        _pool = psycopg2.pool.SimpleConnectionPool(1, 3, connect_timeout=5, **config.DB)
     return _pool.getconn()
 
 
