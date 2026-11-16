@@ -126,7 +126,29 @@ def test_send_alert_uses_smtp_when_configured(signal, snap, monkeypatch):
 
     monkeypatch.setattr(email_alert.smtplib, "SMTP", FakeSMTP)
     email_alert.send_alert(signal, snap, chart_figure=render_chart(snap, "SPY"))
-    assert sent["to"] == "b@example.com"
+    assert sent["to"] == ["b@example.com"]
     parsed = email.message_from_string(sent["body"], policy=email.policy.default)
     assert parsed["Subject"] == "[MarketScanner] SPY ORB BUY @ 581.20 · TP 586.70 · SL 575.70"
     assert "ORB BUY" in parsed["Subject"]
+
+
+def test_send_alert_multiple_recipients(signal, snap, monkeypatch):
+    monkeypatch.setitem(config.EMAIL, "sender", "a@example.com")
+    monkeypatch.setitem(config.EMAIL, "password", "pw")
+    monkeypatch.setitem(config.EMAIL, "recipient", "b@example.com, andrej.bele@gmail.com")
+    sent = {}
+
+    class FakeSMTP:
+        def __init__(self, host, port): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def ehlo(self): pass
+        def starttls(self): pass
+        def login(self, u, p): pass
+        def sendmail(self, frm, to, body): sent["to"] = to; sent["body"] = body
+
+    monkeypatch.setattr(email_alert.smtplib, "SMTP", FakeSMTP)
+    email_alert.send_alert(signal, snap)
+    assert sent["to"] == ["b@example.com", "andrej.bele@gmail.com"]
+    parsed = email.message_from_string(sent["body"], policy=email.policy.default)
+    assert parsed["To"] == "b@example.com, andrej.bele@gmail.com"
