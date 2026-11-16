@@ -18,7 +18,7 @@ from typing import Callable, Optional
 import pytz
 
 from marketscanner import config
-from marketscanner.backtest import report
+from marketscanner.backtest import gallery, html_report, report
 from marketscanner.backtest.engine import AccountConfig, find_exits, run_engine
 from marketscanner.backtest.equity import build_equity
 from marketscanner.backtest.ideas import generate_ideas
@@ -129,6 +129,18 @@ def run(
     report.write_ledger_csv(trades, out_dir / "ledger.csv")
     report.write_text(out_dir / "summary.txt", text)
     report.save_figure(report.render_equity_figure(equity, trades, summary), out_dir / "equity.png")
+
+    chart_paths: dict = {}
+    chart_errors: dict = {}
+    if args.gallery == "all":
+        candle_minutes = getattr(strategy, "candle_minutes", config.CONFIRM_CANDLE_MINUTES)
+        chart_paths, chart_errors = gallery.write_trade_charts(trades, result.frames, out_dir, candle_minutes)
+    page = html_report.build_html(summary, trades, (out_dir / "equity.png").read_bytes(), coverage, chart_paths, chart_errors)
+    (out_dir / "report.html").write_text(page, encoding="utf-8")
+    if chart_errors:
+        failures = [f"  trade {i}: {e}" for i, e in sorted(chart_errors.items())]
+        text += "\n\nCHART FAILURES\n" + "\n".join(failures)
+        report.write_text(out_dir / "summary.txt", text)
 
     print(text)
     print(f"\nWrote {out_dir}")
