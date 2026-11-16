@@ -72,6 +72,14 @@ class Outcome:
 
 
 @dataclass(frozen=True)
+class ExitHit:
+    """The first 1-minute bar that closed a trade, and the price it filled at."""
+    ts: datetime          # UTC, the 1-minute bar stamp
+    price: float          # the level touched, or the bar's open on a gap fill
+    kind: str             # "TP" | "SL" | "GAP_TP" | "GAP_SL"
+
+
+@dataclass(frozen=True)
 class OrbSnapshot:
     session_date: Optional[date]
     candles: pd.DataFrame
@@ -260,6 +268,69 @@ def build_proposal(confirmation: Confirmation, box: Box) -> Proposal:
     return Proposal("SELL", entry, entry - delta, entry + delta, delta)
 
 
+def walk_exit(
+    bars: pd.DataFrame,
+    side: str,
+    take_profit: float,
+    stop_loss: float,
+    gap_fills: bool = False,
+    entry_session: Optional[date] = None,
+) -> Optional[ExitHit]:
+    """
+    The one take-profit / stop-loss rule, shared by the dashboard outcome and the
+    backtester. `bars` are 1-minute bars from the entry onward (UTC index).
+
+    Per bar, BUY: TP touched if high >= take_profit, SL touched if low <=
+    stop_loss. SELL mirrored. Both touched inside one bar counts as the stop
+    (conservative). Exit price is the level itself.
+
+    Gap fills (backtest only, `gap_fills=True`, needs `entry_session`): on the
+    first bar of a session later than the entry session, if the bar already
+    OPENS beyond a level (BUY: open <= stop_loss or open >= take_profit; SELL
+    mirrored) the trade fills at that open ("GAP_SL" / "GAP_TP"), because the
+    open comes before anything else in the bar. A data hole inside a session is
+    not treated as a gap (known limitation): the exit fills at the level.
+
+    Returns None if no level is touched.
+    """
+    if bars.empty:
+        return None
+    buy = side == "BUY"
+    high, low, opn = bars["high"], bars["low"], bars["open"]
+    if buy:
+        tp_hit, sl_hit = high >= take_profit, low <= stop_loss
+    else:
+        tp_hit, sl_hit = low <= take_profit, high >= stop_loss
+    touched = (tp_hit | sl_hit).to_numpy()
+
+    gap_sl = gap_tp = None
+    if gap_fills:
+        if entry_session is None:
+            raise ValueError("walk_exit: gap_fills=True needs entry_session")
+        sess = pd.Index(bars.index.tz_convert(_ET).date)
+        prev = pd.Index([entry_session]).append(sess[:-1])
+        first_of_session = sess != prev
+        if buy:
+            gap_sl = first_of_session & (opn <= stop_loss).to_numpy()
+            gap_tp = first_of_session & (opn >= take_profit).to_numpy()
+        else:
+            gap_sl = first_of_session & (opn >= stop_loss).to_numpy()
+            gap_tp = first_of_session & (opn <= take_profit).to_numpy()
+        touched = touched | gap_sl | gap_tp
+
+    if not touched.any():
+        return None
+    i = int(touched.argmax())
+    ts = _to_utc(bars.index[i]).to_pydatetime()
+    if gap_sl is not None and gap_sl[i]:
+        return ExitHit(ts, float(opn.iloc[i]), "GAP_SL")
+    if gap_tp is not None and gap_tp[i]:
+        return ExitHit(ts, float(opn.iloc[i]), "GAP_TP")
+    if bool(sl_hit.iloc[i]):
+        return ExitHit(ts, stop_loss, "SL")
+    return ExitHit(ts, take_profit, "TP")
+
+
 def session_outcome(
     df_1m: pd.DataFrame,
     confirmation: Confirmation,
@@ -267,37 +338,38 @@ def session_outcome(
     minutes: int = config.CONFIRM_CANDLE_MINUTES,
 ) -> Outcome:
     """
-    Walk the 1-minute bars from the confirmation candle's close (finer than
-    the candles, so a touch is attributed to the right minute). BUY: high >= TP
-    is TP_HIT, low <= SL is SL_HIT; both in one bar count as SL_HIT
-    (conservative). SELL mirrored. Uses every bar including the still-incomplete
-    final bucket, so an outcome can resolve before its candle is drawn.
+    Outcome inside the entry session only (the dashboard resets daily). Walks the
+    1-minute bars from the confirmation candle's close with the shared
+    `walk_exit` rule, gap fills off. Uses every bar including the
+    still-incomplete final bucket, so an outcome can resolve before its candle
+    is drawn.
     """
     df = session_slice(df_1m)
     if df.empty:
         return Outcome("OPEN")
     sdate = session_date_of(df)
     bars = df[df.index >= _to_utc(confirmation.candle_close)]
-    tp, sl = proposal.take_profit, proposal.stop_loss
-    if proposal.side == "BUY":
-        tp_hit = bars["high"] >= tp
-        sl_hit = bars["low"] <= sl
-    else:
-        tp_hit = bars["low"] <= tp
-        sl_hit = bars["high"] >= sl
-    touched = bars[tp_hit | sl_hit]
-    if touched.empty:
+    hit = walk_exit(bars, proposal.side, proposal.take_profit, proposal.stop_loss)
+    if hit is None:
         return Outcome("OPEN")
-    ts = touched.index[0]
-    is_sl = bool(sl_hit.loc[ts])
-    exit_ts = _to_utc(ts)
+    is_sl = hit.kind == "SL"
     return Outcome(
         status="SL_HIT" if is_sl else "TP_HIT",
-        exit_ts=exit_ts.to_pydatetime(),
-        exit_candle=candle_floor(exit_ts, sdate, minutes).to_pydatetime(),
-        exit_price=sl if is_sl else tp,
+        exit_ts=hit.ts,
+        exit_candle=candle_floor(hit.ts, sdate, minutes).to_pydatetime(),
+        exit_price=hit.price,
         r_multiple=-1.0 if is_sl else 1.0,
     )
+
+
+def replay_now(session_date: date) -> datetime:
+    """
+    The `now` to analyse a finished session with: 16:00 ET plus the candle grace,
+    in UTC, so the day's last candle (15:55) counts as complete. Pure: used by
+    --replay and the backtester.
+    """
+    close = et_time_utc(session_date, 16, 0)
+    return (close + pd.Timedelta(seconds=config.CANDLE_GRACE_SECONDS)).to_pydatetime()
 
 
 def snapshot(

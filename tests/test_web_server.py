@@ -97,3 +97,54 @@ def test_health_closed_outside_hours(client):
     r = client.get("/health").get_json()
     assert set(r["data"]) == {"SPY", "QQQ", "GLD"}
     assert r["data"]["GLD"]["status"] == "no_data" or r["data"]["GLD"]["last_bar"] is None
+
+
+class FakeBarStore:
+    def __init__(self, last=None, fail=False):
+        self.last, self.fail, self.calls = last, fail, 0
+
+    def last_session(self, symbol):
+        self.calls += 1
+        if self.fail:
+            raise ConnectionError("db down")
+        return self.last
+
+
+def _client_with_store(monkeypatch, store):
+    from datetime import date
+    state = {"symbols": ["SPY", "QQQ"], "feed": FakeFeed({}), "bar_store": store}
+    monkeypatch.setattr(server, "_state", state)
+    monkeypatch.setitem(server._bars_cache, "at", None)
+    monkeypatch.setitem(server._bars_cache, "value", None)
+    server.app.config["TESTING"] = True
+    return server.app.test_client()
+
+
+def test_health_reports_bars_last_archived(monkeypatch):
+    from datetime import date
+    client = _client_with_store(monkeypatch, FakeBarStore(last=date(2026, 11, 13)))
+    body = client.get("/health").get_json()
+    assert body["bars_last_archived"] == {"SPY": "2026-11-13", "QQQ": "2026-11-13"}
+
+
+def test_health_without_a_store_has_no_bars_field(client):
+    assert "bars_last_archived" not in client.get("/health").get_json()
+
+
+def test_health_survives_a_dead_database(monkeypatch):
+    client = _client_with_store(monkeypatch, FakeBarStore(fail=True))
+    r = client.get("/health")
+    assert r.status_code == 200 and r.get_json()["bars_last_archived"] == {"SPY": "error", "QQQ": "error"}
+
+
+def test_health_asks_the_database_at_most_once_a_minute(monkeypatch):
+    from datetime import date
+    store = FakeBarStore(last=date(2026, 11, 13))
+    client = _client_with_store(monkeypatch, store)
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(server.time, "monotonic", lambda: clock["t"])
+    client.get("/health"); client.get("/health")
+    assert store.calls == 2                      # one call per symbol, only for the first request
+    clock["t"] += 61
+    client.get("/health")
+    assert store.calls == 4

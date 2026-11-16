@@ -28,7 +28,10 @@ STRATEGIES = ["OpeningRange"]
 #                when the Finnhub tier can't stream US ETFs)
 FEED_MODE = os.environ.get("FEED_MODE", "auto").lower()
 
-FINNHUB_API_KEY: str = os.environ["FINNHUB_API_KEY"]
+# Only needed when FEED_MODE != "yfinance" (the Finnhub WebSocket). run_live()
+# fails fast with a clear message in that case; everything else (backtester,
+# replay, tests, a yfinance-only scanner) works without a key.
+FINNHUB_API_KEY: str = os.environ.get("FINNHUB_API_KEY", "")
 
 EMAIL = {
     "smtp_host": "smtp.gmail.com",

@@ -19,6 +19,7 @@ Usage:
 import io
 import logging
 import threading
+import time
 from datetime import datetime, timezone
 
 import pytz
@@ -42,6 +43,31 @@ logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
 # State injected by start_web_server() — populated before the Flask thread starts.
 _state: dict = {}
+
+# /health reports the newest archived session per symbol. The database is asked at
+# most once a minute so a slow database cannot make /health slow.
+_BARS_TTL_SECONDS = 60
+_bars_cache: dict = {"at": None, "value": None}
+
+
+def _bars_last_archived() -> dict | None:
+    store = _state.get("bar_store")
+    if store is None:
+        return None
+    now = time.monotonic()
+    if _bars_cache["at"] is not None and now - _bars_cache["at"] < _BARS_TTL_SECONDS:
+        return _bars_cache["value"]
+    out = {}
+    for sym in _state.get("symbols", []):
+        try:
+            last = store.last_session(sym)
+            out[sym] = last.isoformat() if last else None
+        except Exception as exc:  # a dead database must not break /health
+            log.warning("bars_last_archived(%s) failed: %r", sym, exc)
+            out[sym] = "error"
+    _bars_cache.update(at=now, value=out)
+    return out
+
 
 _NO_CACHE = {
     "Cache-Control": "no-cache, no-store, must-revalidate",
@@ -316,20 +342,25 @@ def health():
     else:
         status = "closed"
 
-    return {
+    result = {
         "status": status,
         "market_open": market_open,
         "symbols": symbols,
         "data": data,
     }
+    archived = _bars_last_archived()
+    if archived is not None:
+        result["bars_last_archived"] = archived
+    return result
 
 
-def start_web_server(symbols: list, feed, port: int = 8080) -> threading.Thread:
+def start_web_server(symbols: list, feed, port: int = 8080, bar_store=None) -> threading.Thread:
     """
     Inject live state and start Flask in a background daemon thread.
     Returns immediately; Flask keeps running until the process exits.
     """
-    _state.update({"symbols": symbols, "feed": feed})
+    _state.update({"symbols": symbols, "feed": feed, "bar_store": bar_store})
+    _bars_cache.update(at=None, value=None)
 
     t = threading.Thread(
         target=lambda: app.run(
