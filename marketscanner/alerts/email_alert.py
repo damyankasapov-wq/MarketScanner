@@ -7,6 +7,7 @@ Body:     header band, proposal table (identical content in plain text and
 """
 import io
 import logging
+import re
 import smtplib
 from datetime import date, datetime
 from email.mime.image import MIMEImage
@@ -200,14 +201,15 @@ def send_alert(signal: Signal, snapshot: Optional[OrbSnapshot] = None, chart_fig
         log.warning("Email not configured — signal logged but not sent: %s", signal)
         return
 
-    msg = build_message(signal, snapshot, chart_figure, sender=cfg["sender"], recipient=cfg["recipient"])
+    recipients = [r.strip() for r in re.split(r"[,;]", cfg["recipient"]) if r.strip()]
+    msg = build_message(signal, snapshot, chart_figure, sender=cfg["sender"], recipient=", ".join(recipients))
 
     try:
         with smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"]) as smtp:
             smtp.ehlo()
             smtp.starttls()
             smtp.login(cfg["sender"], cfg["password"])
-            smtp.sendmail(cfg["sender"], cfg["recipient"], msg.as_string())
+            smtp.sendmail(cfg["sender"], recipients, msg.as_string())
         log.info("Alert sent: %s", subject)
     except Exception as exc:
         log.error("Failed to send alert: %s", exc)
