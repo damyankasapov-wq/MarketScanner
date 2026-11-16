@@ -27,7 +27,9 @@ from marketscanner import config
 
 _ET = pytz.timezone(config.TIMEZONE)
 from marketscanner.alerts.email_alert import send_alert
+from marketscanner.data.archive import archive_frames
 from marketscanner.data.finnhub_feed import FinnhubFeed
+from marketscanner.data.pg_bar_store import PostgresBarStore
 from marketscanner.data.yfinance_feed import fetch_range
 from marketscanner.state.store import (
     init_db, is_on_cooldown, log_signal, set_cooldown, signal_exists,
@@ -97,6 +99,59 @@ def _on_bar(symbol: str, df, now: Optional[datetime] = None) -> None:
     send_alert(signal, snap, chart_figure=fig)
 
 
+def _snapshot_frames(feed) -> dict:
+    """Copies of every symbol's buffer, taken BEFORE the feed is cleared."""
+    frames: dict = {}
+    if feed is None:
+        return frames
+    for symbol in config.MARKETS:
+        try:
+            frames[symbol] = feed.get_df(symbol).copy()
+        except Exception:
+            log.exception("Could not copy %s buffer for the bars archive", symbol)
+    return frames
+
+
+def _archive_in_background(frames: dict, store_factory=None):
+    """
+    Save the copied frames to the bars archive on their own thread. The archive
+    must never be able to delay or break the midnight reset (a database that
+    hangs would otherwise freeze the reset thread and silently kill the next
+    day's alerts), so it runs AFTER the reset, from copies, off-thread.
+    """
+    if not frames:
+        return None
+
+    def work() -> None:
+        try:
+            store = (store_factory or PostgresBarStore)()
+            result = archive_frames(store, frames)
+            log.info(
+                "Bars archive: saved %s; errors: %s",
+                {s: [d.isoformat() for d in ds] for s, ds in result.written.items()},
+                result.errors or "none",
+            )
+        except Exception:
+            log.exception("Bars archive crashed")
+
+    thread = threading.Thread(target=work, name="bars-archive", daemon=True)
+    thread.start()
+    return thread
+
+
+def _do_midnight_reset(feed=None, store_factory=None):
+    """
+    The reset itself: copy the frames, reset every strategy, clear the feed, and
+    only then start the archive thread. Returns the archive thread (or None).
+    """
+    frames = _snapshot_frames(feed)
+    for strategy in _strategies.values():
+        strategy.reset()
+    if feed is not None:
+        feed.clear()
+    return _archive_in_background(frames, store_factory)
+
+
 def _midnight_reset(feed=None) -> None:
     """Reset strategy latches (and clear the feed buffer) at midnight ET."""
     while True:
@@ -112,10 +167,7 @@ def _midnight_reset(feed=None) -> None:
         # until a full process restart).
         try:
             log.info("Midnight reset — resetting strategies and clearing feed buffer")
-            for strategy in _strategies.values():
-                strategy.reset()
-            if feed is not None:
-                feed.clear()
+            _do_midnight_reset(feed)
         except Exception:
             log.exception("Midnight reset failed — will retry at next rollover")
 
@@ -134,7 +186,7 @@ def run_live() -> None:
 
     # HTTP chart server — serves live candlestick charts at http://<host>:8080
     web_port = int(os.environ.get("WEB_PORT", "8080"))
-    start_web_server(symbols=symbols, feed=feed, port=web_port)
+    start_web_server(symbols=symbols, feed=feed, port=web_port, bar_store=PostgresBarStore())
 
     threading.Thread(target=_midnight_reset, args=(feed,), daemon=True).start()
 
