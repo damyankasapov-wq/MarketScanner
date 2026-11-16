@@ -2,6 +2,46 @@
 
 All notable changes to MarketScanner are documented here.
 
+## [0.3.0.0] - 2026-11-16
+
+### Added
+- **Strategy checker (backtester)**: `python -m marketscanner.backtest --from 2026-10-19 --to 2026-11-13 --markets SPY,QQQ,GLD --cash 10000 --per-deal 1000 --min-cash 2000`
+  replays a strategy (ORB for now, behind a registry) over stored 1-minute bars on a
+  simulated account and writes a run folder: `ledger.csv` (every trade: open time, amount,
+  win/lose state, close time, profit or loss, R, minutes held, skipped signals with the
+  reason), `equity.png` (cash available vs invested, and profit/loss over time),
+  `summary.txt`, a one-page `report.html` and one chart per trade in `trades/`.
+  - Account rules: fixed dollar amount per deal with fractional shares; a deal opens only if
+    cash minus the amount stays at or above the minimum cash; SELL is a short that reserves
+    the same amount as collateral.
+  - Trades are followed across days until take profit or stop loss is touched (no forced close
+    at 16:00). A stop or target that the market gaps through overnight fills at the next open,
+    not at the level. Trades still open at the end of the period are marked at the last close
+    and kept out of the win rate.
+  - Summary: profit or loss, win rate, average win and loss, profit factor, average R,
+    average time held, max drawdown, average invested, per-market table, a data-coverage block
+    and a warning below 100 closed trades.
+  - Sessions whose 09:30-10:30 ET window has fewer than 57 of 60 minute bars are skipped and
+    listed, because a hole there would draw a false box.
+- **Bars archive**: a new `bars` table (additive, created at start-up) holds 1-minute bars per
+  symbol. After the midnight reset the scanner saves the day's frames on a separate thread from
+  copies, so the archive can never delay or break the reset. Missing sessions are backfilled
+  from yfinance (raw prices, one day per request, 30-day window). History now grows by itself
+  instead of expiring after 30 days.
+- `/health` reports `bars_last_archived` per symbol (cached for a minute, tolerant of a dead
+  database).
+- Opt-in real-database test: `MS_TEST_DB=1 pytest tests/integration` (throwaway table).
+
+### Changed
+- One shared `walk_exit` take-profit / stop-loss rule in `orb_session`; `session_outcome` (the
+  dashboard) and the backtester both use it. Dashboard behaviour is unchanged.
+- `replay_now` moved from `main.py` into `orb_session` so the backtester needs none of the live
+  scanner's imports.
+- `FINNHUB_API_KEY` is no longer required at import. `run_live()` fails fast with a clear message
+  only when a Finnhub mode needs it, so tests, replay and the backtester run on a clean checkout.
+- The shared Postgres pool has a 5 second connect timeout.
+- `fetch_range` accepts `auto_adjust` (the archive and backfill pass `False` for raw prices).
+
 ## [0.2.0.0] - 2026-11-15
 
 ### Changed
