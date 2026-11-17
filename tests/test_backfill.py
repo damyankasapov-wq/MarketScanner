@@ -4,7 +4,9 @@ from datetime import date, timedelta
 import pandas as pd
 
 from marketscanner.data import backfill
-from marketscanner.data.backfill import MIN_COMPLETE_BARS, ensure_bars, weekdays
+from marketscanner.data.backfill import (
+    MIN_COMPLETE_BARS, REASON_DEEP_NO_DATA, REASON_NO_DATA, ensure_bars, weekdays,
+)
 from marketscanner.data.bar_store import InMemoryBarStore
 from tests.orb_fixtures import df_of, flat
 
@@ -13,8 +15,9 @@ MON, TUE, WED = date(2024, 11, 11), date(2024, 11, 12), date(2024, 11, 13)
 
 
 def _session_frame(d, n=390):
-    # n one-minute bars starting 09:30 ET (14:30 UTC in November)
-    return df_of(flat(f"{d.isoformat()} 14:30", n))
+    # n one-minute bars from the 09:30 ET open (14:30 UTC in winter, 13:30 UTC in summer)
+    open_utc = pd.Timestamp(f"{d.isoformat()} 09:30", tz="America/New_York").tz_convert("UTC")
+    return df_of(flat(open_utc.strftime("%Y-%m-%d %H:%M"), n))
 
 
 class Fetcher:
@@ -83,7 +86,7 @@ def test_archived_old_day_is_neither_fetched_nor_reported():
 def test_holiday_empty_response_is_reported():
     fetch = Fetcher(frames={("SPY", TUE): pd.DataFrame()})
     rep = ensure_bars(InMemoryBarStore(), ["SPY"], TUE, TUE, fetch=fetch, today=TODAY)
-    assert rep.unavailable == [("SPY", TUE, "no data returned (holiday?)")] and rep.fetched == []
+    assert rep.unavailable == [("SPY", TUE, REASON_NO_DATA)] and rep.fetched == []
 
 
 def test_fetch_error_on_one_day_does_not_stop_the_run():
@@ -161,7 +164,7 @@ def test_deep_source_upgrades_a_partial_archived_old_day():
 def test_deep_holiday_and_failure_are_reported():
     rep = ensure_bars(InMemoryBarStore(), ["SPY"], OLD_TUE, OLD_TUE, fetch=Fetcher(), today=TODAY,
                       deep_fetch=DeepFetcher(missing={OLD_TUE}))
-    assert rep.unavailable == [("SPY", OLD_TUE, "no data returned (holiday?)")]
+    assert rep.unavailable == [("SPY", OLD_TUE, REASON_DEEP_NO_DATA)]
     rep = ensure_bars(InMemoryBarStore(), ["SPY"], OLD_MON, OLD_TUE, fetch=Fetcher(), today=TODAY,
                       deep_fetch=DeepFetcher(fail=True))
     assert [d for _, d, _ in rep.unavailable] == [OLD_MON, OLD_TUE] and "alpaca down" in rep.unavailable[0][2]
