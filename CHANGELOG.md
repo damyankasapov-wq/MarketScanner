@@ -2,6 +2,35 @@
 
 All notable changes to MarketScanner are documented here.
 
+## [0.4.0.0] - 2026-11-17
+
+### Added
+- **Years of history for backtests from Alpaca.** With a free Alpaca account
+  (`ALPACA_API_KEY_ID` / `ALPACA_API_SECRET_KEY` in `.env`), sessions older than yfinance's
+  30-day window are fetched from Alpaca (1-minute bars since 2016, full-market SIP feed,
+  raw prices, regular hours only) and stored in the `bars` table. One request per calendar
+  month per symbol; recent days still come from yfinance. Without keys nothing changes.
+- **NYSE trading calendar for the backfill.** Holidays are never requested, every day is cut
+  at its real open and close (half-days end at 13:00 ET, so after-hours prints never reach the
+  archive), and a short day counts as complete at its real length.
+- The coverage summary shows how many sessions came from yfinance and from Alpaca.
+
+### Changed
+- An old session fetched from Alpaca replaces what was stored for that day (one transaction),
+  so a day never mixes two vendors.
+- Alpaca fails fast: wrong keys, a missing data permission (401/403) or any feed other than
+  `sip` stops Alpaca for the rest of the run, as do 2 failed months in a row. The summary says
+  why, once.
+- The coverage summary collapses runs of missing days into one line
+  (`2026-05-01 to 2026-10-16 (121 sessions)`), merges runs across weekends and market holidays,
+  lists them in date order, and wraps long lines in `report.html`.
+- When the database can't be reached, the error shows the host, port and database it tried and,
+  if there is no `.env` (for example in a git worktree), says so.
+
+### Fixed
+- Alpaca requests retry rate limits, server errors and network errors with a capped backoff,
+  stop on a repeated page token, report non-JSON answers clearly and URL-encode the symbol.
+
 ## [0.3.0.0] - 2026-11-16
 
 ### Added

@@ -3,13 +3,14 @@ python -m marketscanner.backtest --from 2026-10-19 --to 2026-11-13 \
     --markets SPY,QQQ,GLD --cash 10000 --per-deal 1000 --min-cash 2000
 
 Reads stored 1-minute bars from the Postgres bars table (backfilling missing
-sessions from yfinance unless --no-backfill), replays the strategy on a simulated
+sessions from yfinance, or Alpaca for older ones, unless --no-backfill), replays the strategy on a simulated
 account and writes a run folder with ledger.csv, equity.png, summary.txt,
 report.html and trades/*.png. Informational only: nothing places orders.
 """
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -46,7 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out", default=None, help=f"output root folder (default {DEFAULT_OUT})")
     p.add_argument("--gallery", choices=["all", "none"], default="all", help="draw a chart for every trade (default all)")
     p.add_argument("--no-backfill", dest="backfill", action="store_false",
-                   help="do not fetch missing sessions from yfinance; use only what is stored")
+                   help="do not fetch missing sessions from yfinance or Alpaca; use only what is stored")
     return p
 
 
@@ -113,7 +114,11 @@ def run(
         result = generate_ideas(store, strategy, symbols, start, end)
     except Exception as exc:  # noqa: BLE001 - one clear message beats a traceback here
         print(f"Cannot use the bars store: {exc!r}\n"
+              f"Using DB_HOST={config.DB['host']} DB_PORT={config.DB['port']} DB_NAME={config.DB['dbname']}.\n"
               "Check DB_HOST / DB_PORT / DB_NAME / DB_USER / DB_PASSWORD (see .env.example).", file=sys.stderr)
+        if not config.ENV_FILE.exists() and "DB_HOST" not in os.environ:
+            print(f"No .env found at {config.ENV_FILE}, so the defaults above are in use. A git worktree does not "
+                  "get a copy of .env: copy it from the main checkout.", file=sys.stderr)
         return 2
 
     exits = find_exits(result.ideas, result.frames)

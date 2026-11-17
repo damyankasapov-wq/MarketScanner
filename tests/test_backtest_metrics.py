@@ -129,3 +129,32 @@ def test_coverage_block_lists_the_problems():
     assert "no data 2024-11-11" in text and "2024-11-07: 289 bars, 1 gap(s) after 10:30" in text
     assert "fetched from yfinance this run: 1" in text and "unavailable SPY 2024-10-01" in text
     assert "incomplete SPY 2024-11-07: only 289 bars" in text
+
+
+def test_coverage_splits_yfinance_and_alpaca_counts():
+    cov = Coverage(sessions=[], backfill=BackfillReport(
+        fetched=[("SPY", date(2024, 11, 6), 390), ("SPY", date(2024, 6, 3), 390), ("SPY", date(2024, 6, 4), 390)],
+        deep_fetched=2))
+    text = format_coverage(cov)
+    assert "fetched from yfinance this run: 1" in text and "fetched from Alpaca this run: 2" in text
+
+
+# Regression: ISSUE-001 - a year backtest without deep history printed one coverage
+# line per missing session (731 lines, 14,000 px in report.html)
+# Found by /qa on 2026-11-17
+# Report: .gstack/qa-reports/qa-report-backtest-cli-2026-11-17.md
+def test_coverage_collapses_runs_of_missing_and_unavailable_sessions():
+    days = [date(2024, 10, d) for d in (1, 2, 3, 4, 7)]
+    why = "older than yfinance's 30-day window and not archived"
+    cov = Coverage(
+        sessions=[SessionInfo("SPY", d, 0, 0, "no_data", 0) for d in days[:4]]
+        + [SessionInfo("SPY", days[4], 390, 60, "ok", 0)],
+        backfill=BackfillReport(unavailable=[("SPY", d, why) for d in days[:4]]
+                                + [("QQQ", days[0], why), ("SPY", days[4], "fetch failed: boom")]),
+    )
+    lines = format_coverage(cov).splitlines()
+    assert "    no data 2024-10-01 to 2024-10-04 (4 weekdays) (holiday or not stored)" in lines
+    assert f"    unavailable SPY 2024-10-01 to 2024-10-04 (4 sessions): {why}" in lines
+    assert f"    unavailable QQQ 2024-10-01: {why}" in lines
+    assert "    unavailable SPY 2024-10-07: fetch failed: boom" in lines
+    assert len(lines) == 7

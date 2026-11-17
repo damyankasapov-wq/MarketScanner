@@ -3,7 +3,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
+load_dotenv(ENV_FILE)
 
 MARKETS = {
     "SPY": {
@@ -32,6 +33,16 @@ FEED_MODE = os.environ.get("FEED_MODE", "auto").lower()
 # fails fast with a clear message in that case; everything else (backtester,
 # replay, tests, a yfinance-only scanner) works without a key.
 FINNHUB_API_KEY: str = os.environ.get("FINNHUB_API_KEY", "")
+
+# Optional: Alpaca market-data keys (free account). When set, the backtest
+# backfill fetches sessions older than yfinance's 30-day window from Alpaca
+# (1-minute history since 2016). Without them those sessions are reported
+# unavailable, as before. Only "sip" (all US exchanges, free for data older
+# than 15 minutes) is supported: any other value stops the Alpaca backfill with
+# an error, because IEX-only bars understate highs and lows.
+ALPACA_API_KEY_ID: str = os.environ.get("ALPACA_API_KEY_ID", "")
+ALPACA_API_SECRET_KEY: str = os.environ.get("ALPACA_API_SECRET_KEY", "")
+ALPACA_DATA_FEED: str = os.environ.get("ALPACA_DATA_FEED", "sip").lower()
 
 EMAIL = {
     "smtp_host": "smtp.gmail.com",

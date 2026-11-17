@@ -36,30 +36,48 @@ class PostgresBarStore:
         self._run(lambda cur: cur.execute(_store.bars_ddl(self.table)), commit=True)
 
     def upsert_bars(self, symbol: str, df: pd.DataFrame) -> int:
-        clean = clean_bars(df)
-        if clean.empty:
+        rows = self._rows(symbol, df)
+        if not rows:
             return 0
-        rows = [
+        self._run(lambda cur: self._insert(cur, rows), commit=True)
+        return len(rows)
+
+    def replace_session(self, symbol: str, session_date: date, df: pd.DataFrame) -> int:
+        """DELETE the session's bars and INSERT the new ones in one transaction."""
+        rows = self._rows(symbol, df)
+        lo, hi = et_date_bounds_utc(session_date, session_date)
+
+        def write(cur):
+            cur.execute(
+                f"DELETE FROM {self.table} WHERE symbol = %s AND ts >= %s AND ts < %s",
+                (symbol, lo.to_pydatetime(), hi.to_pydatetime()),
+            )
+            self._insert(cur, rows)
+
+        self._run(write, commit=True)
+        return len(rows)
+
+    @staticmethod
+    def _rows(symbol: str, df: pd.DataFrame) -> list[tuple]:
+        clean = clean_bars(df)
+        return [
             (symbol, ts.to_pydatetime(), r.open, r.high, r.low, r.close, r.volume)
             for ts, r in zip(clean.index, clean.itertuples(index=False))
         ]
 
-        def write(cur):
-            for i in range(0, len(rows), _CHUNK_ROWS):
-                chunk = rows[i:i + _CHUNK_ROWS]
-                values = ",".join(["(%s,%s,%s,%s,%s,%s,%s)"] * len(chunk))
-                params = [v for row in chunk for v in row]
-                cur.execute(
-                    f"INSERT INTO {self.table} (symbol, ts, open, high, low, close, volume) "
-                    f"VALUES {values} "
-                    "ON CONFLICT (symbol, ts) DO UPDATE SET "
-                    "open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low, "
-                    "close=EXCLUDED.close, volume=EXCLUDED.volume",
-                    params,
-                )
-
-        self._run(write, commit=True)
-        return len(rows)
+    def _insert(self, cur, rows: list[tuple]) -> None:
+        for i in range(0, len(rows), _CHUNK_ROWS):
+            chunk = rows[i:i + _CHUNK_ROWS]
+            values = ",".join(["(%s,%s,%s,%s,%s,%s,%s)"] * len(chunk))
+            params = [v for row in chunk for v in row]
+            cur.execute(
+                f"INSERT INTO {self.table} (symbol, ts, open, high, low, close, volume) "
+                f"VALUES {values} "
+                "ON CONFLICT (symbol, ts) DO UPDATE SET "
+                "open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low, "
+                "close=EXCLUDED.close, volume=EXCLUDED.volume",
+                params,
+            )
 
     def load(self, symbol: str, start: date, end: date) -> pd.DataFrame:
         lo, hi = et_date_bounds_utc(start, end)
