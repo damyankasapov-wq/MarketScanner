@@ -31,7 +31,7 @@ table{border-collapse:collapse;width:100%;font-size:.85rem}th,td{padding:5px 8px
 th:nth-child(-n+4),td:nth-child(-n+4){text-align:left}
 .wrap{overflow-x:auto}.WIN{color:var(--win)}.LOSS{color:var(--loss)}.OPEN{color:var(--open)}.SKIPPED{color:var(--mut)}
 figure{margin:0 0 22px}figcaption{margin-top:6px;font-size:.88rem}
-pre{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px;overflow-x:auto;font-size:.8rem}
+pre{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px;overflow-x:auto;font-size:.8rem;white-space:pre-wrap;overflow-wrap:anywhere}
 footer{margin-top:32px;color:var(--mut);font-size:.8rem}
 """
 
