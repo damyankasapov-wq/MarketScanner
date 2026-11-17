@@ -8,7 +8,7 @@ prints its trade count and warns below MIN_TRUSTWORTHY_TRADES closed trades.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from itertools import groupby
 from typing import Optional
 
@@ -163,6 +163,24 @@ def _span(days: list[date]) -> str:
     return f"{days[0]} to {days[-1]} ({len(days)} sessions)"
 
 
+def _weekday_runs(days: list[date]) -> list[list[date]]:
+    """Split sorted dates into runs of back-to-back weekdays (Friday -> Monday counts)."""
+    runs: list[list[date]] = []
+    for d in days:
+        if runs and _next_weekday(runs[-1][-1]) == d:
+            runs[-1].append(d)
+        else:
+            runs.append([d])
+    return runs
+
+
+def _next_weekday(d: date) -> date:
+    d += timedelta(days=1)
+    while d.weekday() >= 5:
+        d += timedelta(days=1)
+    return d
+
+
 def format_coverage(cov: Coverage) -> str:
     lines = ["DATA COVERAGE"]
     by: dict[str, list[SessionInfo]] = {}
@@ -187,7 +205,8 @@ def format_coverage(cov: Coverage) -> str:
         if bf.deep_fetched:
             lines.append(f"  fetched from Alpaca this run: {bf.deep_fetched} session(s)")
         for (sym, why), run in groupby(bf.unavailable, key=lambda u: (u[0], u[2])):
-            lines.append(f"    unavailable {sym} {_span([d for _, d, _ in run])}: {why}")
+            for days in _weekday_runs([d for _, d, _ in run]):
+                lines.append(f"    unavailable {sym} {_span(days)}: {why}")
         for sym, d, n in bf.incomplete:
             lines.append(f"    incomplete {sym} {d}: only {n} bars from the vendor")
     return "\n".join(lines)
