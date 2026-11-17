@@ -3,35 +3,11 @@ from datetime import date
 
 import pytest
 
-from marketscanner import config
 from marketscanner.data import alpaca_feed, backfill
 
 
-class Resp:
-    def __init__(self, status, body=None, headers=None):
-        self.status_code, self._body, self.headers, self.text = status, body or {}, headers or {}, str(body)
-
-    def json(self):
-        return self._body
-
-
-class Session:
-    def __init__(self, responses):
-        self.responses, self.calls = list(responses), []
-
-    def get(self, url, headers, params, timeout):
-        self.calls.append((url, headers, dict(params)))
-        return self.responses.pop(0)
-
-
-def _bar(t, c=500.0):
-    return {"t": t, "o": c, "h": c + 1, "l": c - 1, "c": c, "v": 1000, "n": 10, "vw": c}
-
-
-@pytest.fixture
-def keys(monkeypatch):
-    monkeypatch.setattr(config, "ALPACA_API_KEY_ID", "kid")
-    monkeypatch.setattr(config, "ALPACA_API_SECRET_KEY", "secret")
+from tests.alpaca_fixtures import Resp, Session
+from tests.alpaca_fixtures import bar as _bar
 
 
 def test_requires_keys():
@@ -39,7 +15,7 @@ def test_requires_keys():
         alpaca_feed.fetch_range("SPY", date(2025, 1, 6), date(2025, 1, 7), session=Session([]))
 
 
-def test_request_shape_pagination_and_session_filter(keys):
+def test_request_shape_pagination_and_session_filter(alpaca_keys):
     page1 = {"bars": [_bar("2025-01-06T14:29:00Z"), _bar("2025-01-06T14:30:00Z")], "next_page_token": "p2"}
     page2 = {"bars": [_bar("2025-01-06T20:59:00Z", 501.0), _bar("2025-01-06T21:00:00Z")], "next_page_token": None}
     http = Session([Resp(200, page1), Resp(200, page2)])
@@ -56,22 +32,22 @@ def test_request_shape_pagination_and_session_filter(keys):
     assert df["close"].iloc[-1] == 501.0
 
 
-def test_retries_on_rate_limit(keys):
+def test_retries_on_rate_limit(alpaca_keys):
     slept = []
     http = Session([Resp(429, headers={"Retry-After": "3"}), Resp(200, {"bars": [_bar("2025-01-06T15:00:00Z")]})])
     df = alpaca_feed.fetch_range("SPY", date(2025, 1, 6), date(2025, 1, 7), session=http, sleep=slept.append)
     assert slept == [3.0] and len(df) == 1
 
 
-def test_http_error_raises(keys):
+def test_http_error_raises(alpaca_keys):
     with pytest.raises(alpaca_feed.AlpacaError, match="403"):
         alpaca_feed.fetch_range("SPY", date(2025, 1, 6), date(2025, 1, 7), session=Session([Resp(403, {"message": "forbidden"})]))
 
 
-def test_empty_response_is_empty_frame(keys):
+def test_empty_response_is_empty_frame(alpaca_keys):
     df = alpaca_feed.fetch_range("SPY", date(2025, 1, 1), date(2025, 1, 2), session=Session([Resp(200, {"bars": None})]))
     assert df.empty
 
 
-def test_keys_enable_deep_backfill(keys):
+def test_keys_enable_deep_backfill(alpaca_keys):
     assert backfill.default_deep_fetch() is alpaca_feed.fetch_range

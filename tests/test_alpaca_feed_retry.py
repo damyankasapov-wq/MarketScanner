@@ -6,15 +6,12 @@ from datetime import date
 
 import pytest
 
-from marketscanner import config
 from marketscanner.data import alpaca_feed
-from tests.test_alpaca_feed import Resp, Session, _bar
+from tests.alpaca_fixtures import Resp, Session
+from tests.alpaca_fixtures import bar as _bar
 
 
-@pytest.fixture(autouse=True)
-def keys(monkeypatch):
-    monkeypatch.setattr(config, "ALPACA_API_KEY_ID", "kid")
-    monkeypatch.setattr(config, "ALPACA_API_SECRET_KEY", "secret")
+pytestmark = pytest.mark.usefixtures("alpaca_keys")
 
 
 def test_transient_server_error_is_retried_with_backoff():

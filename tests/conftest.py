@@ -18,3 +18,12 @@ def _no_alpaca_keys(monkeypatch):
     from marketscanner import config
     monkeypatch.setattr(config, "ALPACA_API_KEY_ID", "")
     monkeypatch.setattr(config, "ALPACA_API_SECRET_KEY", "")
+    monkeypatch.setattr(config, "ALPACA_DATA_FEED", "sip")
+
+
+@pytest.fixture
+def alpaca_keys(monkeypatch):
+    """Fake (non-working) Alpaca keys, for tests that drive alpaca_feed with a fake HTTP session."""
+    from marketscanner import config
+    monkeypatch.setattr(config, "ALPACA_API_KEY_ID", "kid")
+    monkeypatch.setattr(config, "ALPACA_API_SECRET_KEY", "secret")
