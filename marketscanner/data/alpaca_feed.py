@@ -49,6 +49,10 @@ class AlpacaFatalError(AlpacaError):
     """Every further request would fail the same way (keys, permission, settings)."""
 
 
+class AlpacaOutageError(AlpacaError):
+    """Retries used up on rate limits, server errors or network errors: Alpaca itself looks down."""
+
+
 def is_configured() -> bool:
     return bool(config.ALPACA_API_KEY_ID and config.ALPACA_API_SECRET_KEY)
 
@@ -157,4 +161,4 @@ def _get(http, url, headers, params, sleep) -> dict:
             wait = _retry_wait(resp, attempt)
             log.info("alpaca %s, retrying in %.0fs", last.split(":")[0], wait)
             sleep(wait)
-    raise AlpacaError(f"gave up after {MAX_RETRIES + 1} attempts, last: {last}")
+    raise AlpacaOutageError(f"gave up after {MAX_RETRIES + 1} attempts, last: {last}")

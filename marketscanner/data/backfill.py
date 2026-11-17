@@ -14,8 +14,9 @@ fewer bars than that:
 - older: fetch from the deep-history source (Alpaca, when its keys are set), one
   request per calendar month of missing sessions. Each returned session REPLACES
   whatever was stored for that day, so one vendor owns the whole session. On an
-  AlpacaFatalError (keys, permission, settings) or after DEEP_MAX_FAILURES failed
-  months in a row the deep source is not asked again this run; the reason is kept
+  AlpacaFatalError (keys, permission, settings) or after DEEP_MAX_FAILURES months
+  in a row that failed with AlpacaOutageError the deep source is not asked again
+  this run (an error about one symbol, such as an unknown ticker, does not count); the reason is kept
   once in BackfillReport.deep_stopped. Without a deep source old sessions are
   reported, never silently skipped, and an archived (even partial) old session is
   left as it is.
@@ -43,7 +44,7 @@ _ET = pytz.timezone(config.TIMEZONE)
 MIN_COMPLETE_BARS = 385       # a regular session has 390 one-minute bars
 MISSING_BAR_TOLERANCE = 5     # same tolerance on a half-day: 210 minutes -> 205 bars
 YF_DEPTH_DAYS = 29            # yfinance: "must be within the last 30 days"; stay one day inside
-DEEP_MAX_FAILURES = 2         # failed deep months in a row before the deep source is dropped for the run
+DEEP_MAX_FAILURES = 2         # outage-failed deep months in a row before the deep source is dropped for the run
 
 REASON_NO_DATA = "no data returned"
 REASON_DEEP_NO_DATA = "no data from Alpaca (before its 2016 history?)"
@@ -109,8 +110,8 @@ def ensure_bars(
         old_missing: list[date] = []
         for d, sess in cal.items():
             have = counts.get(d, 0)
-            if have >= required_bars(sess, min_bars):
-                continue
+            if required_bars(sess, min_bars) <= have <= sess.minutes:
+                continue                      # complete, and nothing stored after the close
             if (today - d).days > YF_DEPTH_DAYS:
                 if deep.fetch is not None:
                     old_missing.append(d)
@@ -141,10 +142,13 @@ def _deep_backfill(store, report, symbol, missing, counts, cal, deep: _DeepState
         except Exception as exc:  # noqa: BLE001 - one bad month must not stop the run
             log.warning("deep backfill %s %s..%s failed: %r", symbol, month[0], month[-1], exc)
             report.unavailable.extend((symbol, d, f"Alpaca fetch failed: {exc!r}") for d in month)
-            deep.failures += 1
             if isinstance(exc, alpaca_feed.AlpacaFatalError):
                 _stop_deep(report, deep, str(exc))
-            elif deep.failures >= DEEP_MAX_FAILURES:
+                continue
+            if not isinstance(exc, alpaca_feed.AlpacaOutageError):
+                continue                      # about this symbol only (e.g. unknown ticker)
+            deep.failures += 1
+            if deep.failures >= DEEP_MAX_FAILURES:
                 _stop_deep(report, deep, f"{deep.failures} months in a row failed, last: {exc!r}")
             continue
         deep.failures = 0
@@ -176,7 +180,7 @@ def _store_session(store, report, symbol, d, sess, df, have, min_bars, replace: 
         if have == 0:
             report.unavailable.append((symbol, d, empty_reason))
         return
-    if replace:
+    if replace or have > sess.minutes:        # never keep bars stored after the close
         store.replace_session(symbol, d, df)
     else:
         store.upsert_bars(symbol, df)

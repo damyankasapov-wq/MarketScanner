@@ -110,14 +110,48 @@ def test_fatal_error_stops_the_deep_source_for_every_symbol():
 
 
 def test_two_failed_months_in_a_row_stop_the_deep_source():
-    deep = Deep(errors=[alpaca_feed.AlpacaError("HTTP 500")] * DEEP_MAX_FAILURES)
+    deep = Deep(errors=[alpaca_feed.AlpacaOutageError("gave up, last: HTTP 500")] * DEEP_MAX_FAILURES)
     rep = ensure_bars(InMemoryBarStore(), ["SPY"], date(2025, 5, 1), date(2025, 8, 29),
                       fetch=_never, today=TODAY, deep_fetch=deep)
     assert len(deep.calls) == DEEP_MAX_FAILURES and "2 months in a row" in rep.deep_stopped
 
 
 def test_a_success_resets_the_failure_count():
-    deep = Deep(errors=[alpaca_feed.AlpacaError("HTTP 500")])
+    deep = Deep(errors=[alpaca_feed.AlpacaOutageError("gave up, last: HTTP 500")])
     rep = ensure_bars(InMemoryBarStore(), ["SPY"], date(2025, 5, 1), date(2025, 8, 29),
                       fetch=_never, today=TODAY, deep_fetch=deep)
     assert len(deep.calls) == 4 and rep.deep_stopped is None and rep.deep_fetched > 0
+
+
+def test_an_error_about_one_symbol_does_not_stop_the_others():
+    # an unknown ticker gets a 4xx for every month; SPY must still be fetched
+    class PerSymbol(Deep):
+        def __call__(self, symbol, start, end):
+            if symbol == "^VIX":
+                self.calls.append((symbol, start, end))
+                raise alpaca_feed.AlpacaError("HTTP 422: invalid symbol")
+            return super().__call__(symbol, start, end)
+
+    deep = PerSymbol()
+    rep = ensure_bars(InMemoryBarStore(), ["^VIX", "SPY"], date(2025, 5, 1), date(2025, 7, 31),
+                      fetch=_never, today=TODAY, deep_fetch=deep)
+    assert rep.deep_stopped is None and len([c for c in deep.calls if c[0] == "^VIX"]) == 3
+    assert {s for s, _, _ in rep.fetched} == {"SPY"}
+
+
+def test_stored_bars_after_the_close_force_a_clean_replace():
+    store = InMemoryBarStore()
+    store.upsert_bars("SPY", _bars(BLACK_FRIDAY, 379))                  # written before the calendar fix
+    deep = Deep()
+    ensure_bars(store, ["SPY"], BLACK_FRIDAY, BLACK_FRIDAY, fetch=_never, today=TODAY, deep_fetch=deep)
+    assert len(deep.calls) == 1 and store.session_counts("SPY", BLACK_FRIDAY, BLACK_FRIDAY) == {BLACK_FRIDAY: 210}
+
+
+def test_recent_day_with_bars_after_the_close_is_replaced_too():
+    d = TODAY - timedelta(days=5)                                         # within yfinance's window
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    store = InMemoryBarStore()
+    store.upsert_bars("SPY", _bars(d, 420))                               # 30 bars past 16:00
+    rep = ensure_bars(store, ["SPY"], d, d, fetch=lambda s, a, b: _bars(a, 390), today=TODAY, deep_fetch=None)
+    assert store.session_counts("SPY", d, d) == {d: 390} and len(rep.fetched) == 1
