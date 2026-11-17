@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
+from itertools import groupby
 from typing import Optional
 
 import pandas as pd
@@ -155,6 +156,13 @@ def _hold(minutes: Optional[float], sessions: Optional[float]) -> str:
     return f"{h}h {m:02d}m of trading time, {sessions:.1f} sessions"
 
 
+def _span(days: list[date]) -> str:
+    """One date as is; a consecutive run as "first to last (N sessions)"."""
+    if len(days) == 1:
+        return str(days[0])
+    return f"{days[0]} to {days[-1]} ({len(days)} sessions)"
+
+
 def format_coverage(cov: Coverage) -> str:
     lines = ["DATA COVERAGE"]
     by: dict[str, list[SessionInfo]] = {}
@@ -163,20 +171,23 @@ def format_coverage(cov: Coverage) -> str:
     for sym, ss in by.items():
         ok = [s for s in ss if s.status == "ok"]
         lines.append(f"  {sym}: {len(ok)} of {len(ss)} weekdays used")
-        for s in ss:
-            if s.status == "skipped_opening_hole":
-                lines.append(f"    skipped {s.date}: only {s.opening_bars} of 60 opening-hour bars")
-            elif s.status == "no_data":
-                lines.append(f"    no data {s.date} (holiday or not stored)")
-            elif s.later_holes:
-                lines.append(f"    {s.date}: {s.bars} bars, {s.later_holes} gap(s) after 10:30 (exits may fill late)")
+        for is_gap, run in groupby(ss, key=lambda s: s.status == "no_data"):
+            run = list(run)
+            if is_gap:
+                lines.append(f"    no data {_span([s.date for s in run])} (holiday or not stored)")
+                continue
+            for s in run:
+                if s.status == "skipped_opening_hole":
+                    lines.append(f"    skipped {s.date}: only {s.opening_bars} of 60 opening-hour bars")
+                elif s.later_holes:
+                    lines.append(f"    {s.date}: {s.bars} bars, {s.later_holes} gap(s) after 10:30 (exits may fill late)")
     if cov.backfill is not None:
         bf = cov.backfill
         lines.append(f"  fetched from yfinance this run: {len(bf.fetched) - bf.deep_fetched} session(s)")
         if bf.deep_fetched:
             lines.append(f"  fetched from Alpaca this run: {bf.deep_fetched} session(s)")
-        for sym, d, why in bf.unavailable:
-            lines.append(f"    unavailable {sym} {d}: {why}")
+        for (sym, why), run in groupby(bf.unavailable, key=lambda u: (u[0], u[2])):
+            lines.append(f"    unavailable {sym} {_span([d for _, d, _ in run])}: {why}")
         for sym, d, n in bf.incomplete:
             lines.append(f"    incomplete {sym} {d}: only {n} bars from the vendor")
     return "\n".join(lines)
