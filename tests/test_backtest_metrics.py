@@ -129,3 +129,11 @@ def test_coverage_block_lists_the_problems():
     assert "no data 2024-11-11" in text and "2024-11-07: 289 bars, 1 gap(s) after 10:30" in text
     assert "fetched from yfinance this run: 1" in text and "unavailable SPY 2024-10-01" in text
     assert "incomplete SPY 2024-11-07: only 289 bars" in text
+
+
+def test_coverage_splits_yfinance_and_alpaca_counts():
+    cov = Coverage(sessions=[], backfill=BackfillReport(
+        fetched=[("SPY", date(2024, 11, 6), 390), ("SPY", date(2024, 6, 3), 390), ("SPY", date(2024, 6, 4), 390)],
+        deep_fetched=2))
+    text = format_coverage(cov)
+    assert "fetched from yfinance this run: 1" in text and "fetched from Alpaca this run: 2" in text

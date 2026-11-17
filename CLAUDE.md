@@ -11,7 +11,9 @@ proposal; Flask dashboard on port 8080. Informational only, nothing trades.
 - Backtest a strategy on a simulated account: `python -m marketscanner.backtest --from 2026-10-19
   --to 2026-11-13 --markets SPY,QQQ,GLD --cash 10000 --per-deal 1000 --min-cash 2000` (reads the
   Postgres `bars` table via the DB_* settings, backfilling missing sessions from yfinance; the live
-  scanner archives each day's bars after the midnight reset). Output goes to `output/backtest/<run>/`.
+  scanner archives each day's bars after the midnight reset). Sessions older than yfinance's 30-day
+  window come from Alpaca (free account, 1-min history since 2016) when `ALPACA_API_KEY_ID` /
+  `ALPACA_API_SECRET_KEY` are set (`marketscanner/data/alpaca_feed.py`). Output goes to `output/backtest/<run>/`.
 - Real-Postgres test for the bars table (opt-in): `MS_TEST_DB=1 pytest tests/integration`.
 
 ## Skill routing

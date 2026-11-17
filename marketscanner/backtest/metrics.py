@@ -172,7 +172,9 @@ def format_coverage(cov: Coverage) -> str:
                 lines.append(f"    {s.date}: {s.bars} bars, {s.later_holes} gap(s) after 10:30 (exits may fill late)")
     if cov.backfill is not None:
         bf = cov.backfill
-        lines.append(f"  fetched from yfinance this run: {len(bf.fetched)} session(s)")
+        lines.append(f"  fetched from yfinance this run: {len(bf.fetched) - bf.deep_fetched} session(s)")
+        if bf.deep_fetched:
+            lines.append(f"  fetched from Alpaca this run: {bf.deep_fetched} session(s)")
         for sym, d, why in bf.unavailable:
             lines.append(f"    unavailable {sym} {d}: {why}")
         for sym, d, n in bf.incomplete:

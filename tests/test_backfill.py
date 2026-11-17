@@ -117,3 +117,55 @@ def test_default_fetch_asks_for_raw_prices(monkeypatch):
     monkeypatch.setattr(backfill, "fetch_range", fake_fetch_range)
     ensure_bars(InMemoryBarStore(), ["SPY"], MON, MON, today=TODAY)
     assert seen["auto_adjust"] is False
+
+
+# --- deep history (Alpaca) for sessions older than yfinance's window ---------
+
+OLD_MON, OLD_TUE = date(2024, 9, 30), date(2024, 10, 1)     # spans two calendar months
+
+
+class DeepFetcher:
+    def __init__(self, missing=(), fail=False):
+        self.calls, self.missing, self.fail = [], set(missing), fail
+
+    def __call__(self, symbol, start, end):
+        self.calls.append((symbol, start, end))
+        if self.fail:
+            raise ConnectionError("alpaca down")
+        frames = [_session_frame(d) for d in weekdays(start, end - timedelta(1)) if d not in self.missing]
+        return pd.concat(frames) if frames else pd.DataFrame()
+
+
+def test_old_sessions_come_from_deep_source_one_request_per_month():
+    store, fetch, deep = InMemoryBarStore(), Fetcher(), DeepFetcher()
+    rep = ensure_bars(store, ["SPY"], OLD_MON, OLD_TUE, fetch=fetch, today=TODAY, deep_fetch=deep)
+    assert fetch.calls == []
+    assert deep.calls == [("SPY", OLD_MON, OLD_MON + timedelta(1)), ("SPY", OLD_TUE, OLD_TUE + timedelta(1))]
+    assert rep.deep_fetched == 2 and rep.unavailable == []
+    assert store.session_counts("SPY", OLD_MON, OLD_TUE) == {OLD_MON: 390, OLD_TUE: 390}
+
+
+def test_recent_days_still_use_yfinance_when_deep_source_is_set():
+    fetch, deep = Fetcher(), DeepFetcher()
+    rep = ensure_bars(InMemoryBarStore(), ["SPY"], MON, MON, fetch=fetch, today=TODAY, deep_fetch=deep)
+    assert deep.calls == [] and [c[1] for c in fetch.calls] == [MON] and rep.deep_fetched == 0
+
+
+def test_deep_source_upgrades_a_partial_archived_old_day():
+    store = InMemoryBarStore()
+    store.upsert_bars("SPY", _session_frame(OLD_TUE, 50))
+    ensure_bars(store, ["SPY"], OLD_TUE, OLD_TUE, fetch=Fetcher(), today=TODAY, deep_fetch=DeepFetcher())
+    assert store.session_counts("SPY", OLD_TUE, OLD_TUE) == {OLD_TUE: 390}
+
+
+def test_deep_holiday_and_failure_are_reported():
+    rep = ensure_bars(InMemoryBarStore(), ["SPY"], OLD_TUE, OLD_TUE, fetch=Fetcher(), today=TODAY,
+                      deep_fetch=DeepFetcher(missing={OLD_TUE}))
+    assert rep.unavailable == [("SPY", OLD_TUE, "no data returned (holiday?)")]
+    rep = ensure_bars(InMemoryBarStore(), ["SPY"], OLD_MON, OLD_TUE, fetch=Fetcher(), today=TODAY,
+                      deep_fetch=DeepFetcher(fail=True))
+    assert [d for _, d, _ in rep.unavailable] == [OLD_MON, OLD_TUE] and "alpaca down" in rep.unavailable[0][2]
+
+
+def test_no_alpaca_keys_means_no_deep_source():
+    assert backfill.default_deep_fetch() is None

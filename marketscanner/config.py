@@ -33,6 +33,15 @@ FEED_MODE = os.environ.get("FEED_MODE", "auto").lower()
 # replay, tests, a yfinance-only scanner) works without a key.
 FINNHUB_API_KEY: str = os.environ.get("FINNHUB_API_KEY", "")
 
+# Optional: Alpaca market-data keys (free account). When set, the backtest
+# backfill fetches sessions older than yfinance's 30-day window from Alpaca
+# (1-minute history since 2016). Without them those sessions are reported
+# unavailable, as before. "sip" = all US exchanges (free for data older than
+# 15 minutes); "iex" = IEX exchange only.
+ALPACA_API_KEY_ID: str = os.environ.get("ALPACA_API_KEY_ID", "")
+ALPACA_API_SECRET_KEY: str = os.environ.get("ALPACA_API_SECRET_KEY", "")
+ALPACA_DATA_FEED: str = os.environ.get("ALPACA_DATA_FEED", "sip").lower()
+
 EMAIL = {
     "smtp_host": "smtp.gmail.com",
     "smtp_port": 587,
