@@ -28,14 +28,18 @@ def fetch_today(symbol: str) -> pd.DataFrame:
     return df
 
 
-def fetch_range(symbol: str, start: date, end: date) -> pd.DataFrame:
-    """Download 1-minute bars for a date range (max ~30 days back on yfinance free)."""
+def fetch_range(symbol: str, start: date, end: date, auto_adjust: bool = True) -> pd.DataFrame:
+    """
+    Download 1-minute bars for a date range. yfinance limits 1-minute data to the
+    last 30 days and to about 8 calendar days per request. The archive and
+    backfill pass auto_adjust=False so prices are the raw traded prices.
+    """
     df = yf.download(
         symbol,
         start=start.isoformat(),
         end=end.isoformat(),
         interval="1m",
-        auto_adjust=True,
+        auto_adjust=auto_adjust,
         progress=False,
     )
     if df.empty:

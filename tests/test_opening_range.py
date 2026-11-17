@@ -1,162 +1,159 @@
 """
-Unit tests for OpeningRangeStrategy using frozen historical data.
-Reference date: 2024-11-06 (US election day — high SPY volatility, confirmed ORB breakout).
+Unit tests for OpeningRangeStrategy on the snapshot-based trigger.
+
+The strategy no longer owns a state machine: it reads orb_session.snapshot()
+and decides whether to alert (once per session, only while the confirmation
+is fresh). Reference session 2024-11-06 (EST): 09:30 ET = 14:30 UTC.
 """
-from datetime import datetime, timezone
+import logging
+from datetime import date, timedelta
 
 import pandas as pd
 import pytest
 
-from marketscanner.strategies.opening_range import OpeningRangeStrategy, _State
+from marketscanner import config
+from marketscanner.strategies import orb_session
+from marketscanner.strategies.opening_range import OpeningRangeStrategy
+from tests.orb_fixtures import (
+    BOX, C_GREEN_ABOVE, C_GREEN_ABOVE_2, C_RED_ABOVE, C_RED_BELOW, C_WICK_INSIDE,
+    ORB_BARS, TRAIL, TRAIL_2, bar, candle_bars, df_of, flat, utc,
+)
+
+SESSION = date(2024, 11, 6)
+NOW = utc(2024, 11, 6, 15, 36, 10)   # 10:36:10 ET, just after the 15:35 bar stamps
 
 
-def _make_bar(dt_str: str, open_, high, low, close, volume=1_000_000) -> pd.DataFrame:
-    ts = pd.Timestamp(dt_str, tz="UTC")
-    return pd.DataFrame(
-        [{"open": open_, "high": high, "low": low, "close": close, "volume": volume}],
-        index=pd.DatetimeIndex([ts], tz="UTC"),
-    )
+def _run(strategy, df, now=NOW):
+    """Feed the frame bar by bar (as the live loop does) and collect signals."""
+    signals = []
+    for i in range(1, len(df) + 1):
+        sig = strategy.check(df.iloc[:i], {}, now=now)
+        if sig:
+            signals.append(sig)
+    return signals
 
 
-def _build_df(bars: list[pd.DataFrame]) -> pd.DataFrame:
-    return pd.concat(bars).sort_index()
-
-
-# 2024-11-06 ET times → UTC: ET is UTC-5 on that date (EST)
-# 09:30 ET = 14:30 UTC
-# 10:30 ET = 15:30 UTC
-# 10:31 ET = 15:31 UTC
-
-ORB_BARS = [
-    _make_bar("2024-11-06 14:30:00+00:00", 575.00, 578.00, 574.50, 577.00),  # 09:30 ET
-    _make_bar("2024-11-06 14:31:00+00:00", 577.00, 579.50, 576.00, 578.00),  # 09:31 ET
-    _make_bar("2024-11-06 15:29:00+00:00", 578.00, 580.00, 577.00, 579.00),  # 10:29 ET — last in window
-    # box_high = 580.00, box_low = 574.50
-]
-
-POST_ORB_NO_BREAK = [
-    _make_bar("2024-11-06 15:30:00+00:00", 579.00, 579.50, 578.00, 579.00),  # 10:30 ET — watching, no break
-]
-
-POST_ORB_BREAK_UP = [
-    _make_bar("2024-11-06 15:31:00+00:00", 580.50, 581.00, 580.00, 580.50),  # close > 580.00 → UP
-]
-
-POST_ORB_BREAK_DOWN = [
-    _make_bar("2024-11-06 15:31:00+00:00", 574.00, 574.50, 573.00, 573.80),  # close < 574.50 → DOWN
-]
-
-
-class TestOpeningRangeStrategy:
-    def _strategy(self):
-        return OpeningRangeStrategy("SPY")
-
-    def test_idle_before_orb_start(self):
-        s = self._strategy()
-        pre_bar = _make_bar("2024-11-06 14:00:00+00:00", 574.00, 575.00, 573.50, 574.50)
-        signal = s.check(pre_bar, {})
-        assert signal is None
-        assert s._state == _State.IDLE
-
-    def test_builds_range_during_orb(self):
-        s = self._strategy()
-        df = _build_df(ORB_BARS)
-        for i in range(1, len(df) + 1):
-            s.check(df.iloc[:i], {})
-        assert s._state == _State.BUILDING
-        assert s._range_high == pytest.approx(580.00)
-        assert s._range_low == pytest.approx(574.50)
-
-    def test_no_signal_on_touch(self):
-        s = self._strategy()
-        df = _build_df(ORB_BARS + POST_ORB_NO_BREAK)
-        signal = None
-        for i in range(1, len(df) + 1):
-            signal = s.check(df.iloc[:i], {})
-        assert signal is None
-
-    def test_fires_up_on_close_above_box(self):
-        s = self._strategy()
-        df = _build_df(ORB_BARS + POST_ORB_NO_BREAK + POST_ORB_BREAK_UP)
-        signal = None
-        for i in range(1, len(df) + 1):
-            result = s.check(df.iloc[:i], {})
-            if result:
-                signal = result
-        assert signal is not None
-        assert signal.direction == "UP"
-        assert signal.price == pytest.approx(580.50)
-        assert signal.box_top == pytest.approx(580.00)
-        assert signal.box_bottom == pytest.approx(574.50)
-
-    def test_fires_down_on_close_below_box(self):
-        s = self._strategy()
-        df = _build_df(ORB_BARS + POST_ORB_NO_BREAK + POST_ORB_BREAK_DOWN)
-        signal = None
-        for i in range(1, len(df) + 1):
-            result = s.check(df.iloc[:i], {})
-            if result:
-                signal = result
-        assert signal is not None
-        assert signal.direction == "DOWN"
-        assert signal.price == pytest.approx(573.80)
-
-    def test_no_second_signal_after_fire(self):
-        s = self._strategy()
-        another_break = _make_bar("2024-11-06 15:32:00+00:00", 581.00, 582.00, 580.50, 581.50)
-        df = _build_df(ORB_BARS + POST_ORB_NO_BREAK + POST_ORB_BREAK_UP + [another_break])
-        signals = []
-        for i in range(1, len(df) + 1):
-            result = s.check(df.iloc[:i], {})
-            if result:
-                signals.append(result)
-        assert len(signals) == 1
-
-    def test_exact_touch_does_not_fire(self):
-        # close == box_high must NOT fire (strategy uses strict >, not >=)
-        s = self._strategy()
-        touch_bar = _make_bar("2024-11-06 15:31:00+00:00", 579.5, 581.0, 579.0, 580.00)
-        df = _build_df(ORB_BARS + POST_ORB_NO_BREAK + [touch_bar])
-        signal = None
-        for i in range(1, len(df) + 1):
-            result = s.check(df.iloc[:i], {})
-            if result:
-                signal = result
-        assert signal is None
-
-    def test_exact_touch_bottom_does_not_fire(self):
-        # close == box_low must NOT fire
-        s = self._strategy()
-        touch_bar = _make_bar("2024-11-06 15:31:00+00:00", 575.0, 575.5, 573.0, 574.50)
-        df = _build_df(ORB_BARS + POST_ORB_NO_BREAK + [touch_bar])
-        signal = None
-        for i in range(1, len(df) + 1):
-            result = s.check(df.iloc[:i], {})
-            if result:
-                signal = result
-        assert signal is None
-
+class TestTrigger:
     def test_empty_df_returns_none(self):
-        s = self._strategy()
-        assert s.check(pd.DataFrame(), {}) is None
+        assert OpeningRangeStrategy("SPY").check(pd.DataFrame(), {}, now=NOW) is None
 
-    def test_building_to_watching_transition_at_orb_end(self):
-        # first bar AT 10:30 ET (15:30 UTC) triggers BUILDING→WATCHING
-        s = self._strategy()
-        df = _build_df(ORB_BARS)
-        for i in range(1, len(df) + 1):
-            s.check(df.iloc[:i], {})
-        assert s._state == _State.BUILDING
-        first_watch = _make_bar("2024-11-06 15:30:00+00:00", 579.0, 579.5, 578.0, 579.0)
-        s.check(_build_df(ORB_BARS + [first_watch]), {})
-        assert s._state == _State.WATCHING
+    def test_no_signal_before_orb_end(self):
+        s = OpeningRangeStrategy("SPY")
+        assert _run(s, df_of(ORB_BARS)) == []
+        assert s._fired_session is None
 
-    def test_reset_clears_state(self):
-        s = self._strategy()
-        df = _build_df(ORB_BARS + POST_ORB_NO_BREAK + POST_ORB_BREAK_UP)
-        for i in range(1, len(df) + 1):
-            s.check(df.iloc[:i], {})
+    def test_close_outside_wick_inside_does_not_fire(self):
+        assert _run(OpeningRangeStrategy("SPY"), df_of(ORB_BARS + C_WICK_INSIDE + TRAIL)) == []
+
+    def test_red_candle_above_does_not_fire(self):
+        assert _run(OpeningRangeStrategy("SPY"), df_of(ORB_BARS + C_RED_ABOVE + TRAIL)) == []
+
+    def test_green_candle_fully_above_fires_buy(self):
+        s = OpeningRangeStrategy("SPY")
+        sigs = _run(s, df_of(ORB_BARS + C_GREEN_ABOVE + TRAIL))
+        assert len(sigs) == 1
+        sig = sigs[0]
+        assert sig.direction == "UP" and sig.side == "BUY"
+        assert sig.entry == pytest.approx(581.2) and sig.price == sig.entry
+        assert sig.take_profit == pytest.approx(586.7)
+        assert sig.stop_loss == pytest.approx(575.7)
+        assert sig.delta == pytest.approx(5.5)
+        assert sig.box_top == pytest.approx(580.0) and sig.box_bottom == pytest.approx(574.5)
+        assert sig.confirm_open == utc(2024, 11, 6, 15, 30)
+        assert sig.confirm_close == utc(2024, 11, 6, 15, 35)
+        assert sig.candle_minutes == config.CONFIRM_CANDLE_MINUTES
+        assert sig.session_date == SESSION
+        assert s._fired_session == SESSION
+
+    def test_red_candle_fully_below_fires_sell(self):
+        sigs = _run(OpeningRangeStrategy("SPY"), df_of(ORB_BARS + C_RED_BELOW + TRAIL))
+        assert len(sigs) == 1
+        sig = sigs[0]
+        assert sig.direction == "DOWN" and sig.side == "SELL"
+        assert sig.entry == pytest.approx(573.2)
+        assert sig.take_profit == pytest.approx(567.7)
+        assert sig.stop_loss == pytest.approx(578.7)
+
+    def test_fires_only_once_the_candle_is_complete(self):
+        # The confirmation candle's bars alone (newest bucket, no later bar, no grace) → silent
+        s = OpeningRangeStrategy("SPY")
+        assert _run(s, df_of(ORB_BARS + C_GREEN_ABOVE), now=utc(2024, 11, 6, 15, 34, 30)) == []
+        assert s._fired_session is None
+
+    def test_fired_at_is_injected_now_not_candle_time(self):
+        sig = _run(OpeningRangeStrategy("SPY"), df_of(ORB_BARS + C_GREEN_ABOVE + TRAIL))[0]
+        assert sig.fired_at == NOW
+        assert sig.fired_at != sig.confirm_close
+
+
+class TestLatches:
+    def test_one_signal_per_day(self):
+        s = OpeningRangeStrategy("SPY")
+        df = df_of(ORB_BARS + C_GREEN_ABOVE + C_GREEN_ABOVE_2 + TRAIL_2)
+        assert len(_run(s, df, now=utc(2024, 11, 6, 15, 41))) == 1
+        # and again on a later poll with the same frame
+        assert s.check(df, {}, now=utc(2024, 11, 6, 15, 42)) is None
+
+    def test_reset_clears_latches(self):
+        s = OpeningRangeStrategy("SPY")
+        _run(s, df_of(ORB_BARS + C_GREEN_ABOVE + TRAIL))
+        assert s._fired_session == SESSION
         s.reset()
-        assert s._state == _State.IDLE
-        assert s._range_high is None
-        assert s._range_low is None
+        assert s._fired_session is None and s._warned_flat_session is None
+
+    def test_flat_box_warning_logged_once(self, caplog):
+        s = OpeningRangeStrategy("SPY")
+        flat_orb = [bar("2024-11-06 14:30:00+00:00", 580, 580, 580, 580)]
+        above = candle_bars("2024-11-06 15:30", 580.5, 581.5, 580.2, 581.2) + TRAIL + TRAIL_2
+        df = df_of(flat_orb + above)
+        with caplog.at_level(logging.WARNING, logger="marketscanner.strategies.opening_range"):
+            assert _run(s, df, now=utc(2024, 11, 6, 15, 41)) == []
+            assert s.check(df, {}, now=utc(2024, 11, 6, 15, 42)) is None
+        flat_warnings = [r for r in caplog.records if "flat opening range" in r.getMessage()]
+        assert len(flat_warnings) == 1
+        assert s._warned_flat_session == SESSION
+        assert s._fired_session is None
+
+
+class TestLateness:
+    # Confirmation candle 10:40-10:45 ET (15:40-15:45 UTC)
+    CONF_1040 = candle_bars("2024-11-06 15:40", 580.5, 581.5, 580.2, 581.2)
+
+    def test_missed_poll_still_fires(self):
+        # frame jumps from 10:44 to 10:52: the 10:45 confirmation is 7 min old → fires
+        s = OpeningRangeStrategy("SPY")
+        df = df_of(ORB_BARS + self.CONF_1040 + flat("2024-11-06 15:52", 1, 582.0))
+        sig = s.check(df, {}, now=utc(2024, 11, 6, 15, 53))
+        assert sig is not None
+        assert sig.confirm_close == utc(2024, 11, 6, 15, 45)
+
+    def test_restart_at_1100_refuses_but_snapshot_keeps_proposal(self):
+        s = OpeningRangeStrategy("SPY")
+        df = df_of(ORB_BARS + self.CONF_1040 + flat("2024-11-06 15:45", 16, 582.0))   # through 11:00 ET
+        assert s.check(df, {}, now=utc(2024, 11, 6, 16, 0, 30)) is None
+        assert s._fired_session == SESSION                       # refusal latches the session
+        snap = orb_session.snapshot(df, now=utc(2024, 11, 6, 16, 0, 30))
+        assert snap.proposal is not None and snap.proposal.side == "BUY"
+
+    def test_two_hour_old_confirmation_refused_and_stays_silent(self, caplog):
+        s = OpeningRangeStrategy("SPY")
+        df = df_of(ORB_BARS + self.CONF_1040 + flat("2024-11-06 15:45", 120, 582.0))  # through 12:44 ET
+        with caplog.at_level(logging.INFO, logger="marketscanner.strategies.opening_range"):
+            assert s.check(df, {}, now=utc(2024, 11, 6, 17, 45)) is None
+        assert any("refused as stale" in r.getMessage() for r in caplog.records)
+        # later polls, even with fresh bars, stay silent for the session
+        later = df_of(list(df.iloc[[i]] for i in range(len(df))) + flat("2024-11-06 17:45", 3, 582.0))
+        assert s.check(later, {}, now=utc(2024, 11, 6, 17, 48)) is None
+
+    def test_boundary_is_inclusive(self):
+        s = OpeningRangeStrategy("SPY")
+        limit = timedelta(minutes=config.CONFIRM_MAX_LATENESS_MINUTES)
+        newest = utc(2024, 11, 6, 15, 45) + limit
+        df = df_of(ORB_BARS + self.CONF_1040 + [bar(newest, 582, 582, 582, 582)])
+        assert s.check(df, {}, now=newest + timedelta(seconds=30)) is not None
+
+
+class TestSessionBoxAlias:
+    def test_tuple_alias(self):
+        assert OpeningRangeStrategy.session_box(df_of(ORB_BARS)) == (BOX.top, BOX.bottom)
+        assert OpeningRangeStrategy.session_box(pd.DataFrame()) == (None, None)
