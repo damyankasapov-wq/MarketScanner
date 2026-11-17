@@ -153,7 +153,7 @@ def test_coverage_collapses_runs_of_missing_and_unavailable_sessions():
                                 + [("QQQ", days[0], why), ("SPY", days[4], "fetch failed: boom")]),
     )
     lines = format_coverage(cov).splitlines()
-    assert "    no data 2024-10-01 to 2024-10-04 (4 sessions) (holiday or not stored)" in lines
+    assert "    no data 2024-10-01 to 2024-10-04 (4 weekdays) (holiday or not stored)" in lines
     assert f"    unavailable SPY 2024-10-01 to 2024-10-04 (4 sessions): {why}" in lines
     assert f"    unavailable QQQ 2024-10-01: {why}" in lines
     assert "    unavailable SPY 2024-10-07: fetch failed: boom" in lines

@@ -16,6 +16,7 @@ class DeadStore:
 def test_missing_env_file_is_named_with_the_settings_in_use(tmp_path, capsys, monkeypatch):
     missing = tmp_path / "nowhere" / ".env"
     monkeypatch.setattr(config, "ENV_FILE", missing)
+    monkeypatch.delenv("DB_HOST", raising=False)
     monkeypatch.setitem(config.DB, "host", "localhost")
     assert run(BASE + ["--gallery", "none"], store=DeadStore(), today=TODAY, out_root=tmp_path / "out") == 2
     err = capsys.readouterr().err
@@ -31,3 +32,13 @@ def test_present_env_file_gives_no_missing_env_hint(tmp_path, capsys, monkeypatc
     assert run(BASE + ["--gallery", "none"], store=DeadStore(), today=TODAY, out_root=tmp_path / "out") == 2
     err = capsys.readouterr().err
     assert "Using DB_HOST=db.example" in err and "No .env found" not in err
+
+
+def test_db_host_from_the_environment_gives_no_missing_env_hint(tmp_path, capsys, monkeypatch):
+    # Docker / CI: no .env file, but DB_* come from the process environment
+    monkeypatch.setattr(config, "ENV_FILE", tmp_path / "nowhere" / ".env")
+    monkeypatch.setenv("DB_HOST", "postgres")
+    monkeypatch.setitem(config.DB, "host", "postgres")
+    assert run(BASE + ["--gallery", "none"], store=DeadStore(), today=TODAY, out_root=tmp_path / "out") == 2
+    err = capsys.readouterr().err
+    assert "Using DB_HOST=postgres" in err and "No .env found" not in err

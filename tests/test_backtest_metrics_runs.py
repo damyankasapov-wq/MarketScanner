@@ -27,3 +27,22 @@ def test_friday_to_monday_is_one_run_but_a_skipped_weekday_breaks_it():
     lines = _lines([("SPY", d, why) for d in days])
     assert f"    unavailable SPY 2026-05-07 to 2026-05-11 (3 sessions): {why}" in lines
     assert f"    unavailable SPY 2026-05-13: {why}" in lines
+
+
+def test_runs_continue_across_a_market_holiday():
+    why = "older than yfinance's 30-day window and not archived"
+    days = [date(2026, 5, 21), date(2026, 5, 22), date(2026, 5, 26)]         # Memorial Day 05-25 in between
+    assert f"    unavailable SPY 2026-05-21 to 2026-05-26 (3 sessions): {why}" in _lines([("SPY", d, why) for d in days])
+
+
+def test_unavailable_lines_come_out_in_date_order():
+    why = "fetch failed: boom"
+    lines = _lines([("SPY", date(2026, 11, 5), why), ("SPY", date(2026, 5, 6), why)])
+    got = [l for l in lines if "unavailable" in l]
+    assert got == [f"    unavailable SPY 2026-05-06: {why}", f"    unavailable SPY 2026-11-05: {why}"]
+
+
+def test_deep_stop_is_reported_once():
+    rep = BackfillReport(deep_stopped="HTTP 401 (check the Alpaca keys)")
+    text = format_coverage(Coverage(sessions=[], backfill=rep))
+    assert text.count("Alpaca stopped for the rest of this run: HTTP 401") == 1

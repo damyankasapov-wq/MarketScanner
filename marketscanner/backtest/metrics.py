@@ -8,7 +8,7 @@ prints its trade count and warns below MIN_TRUSTWORTHY_TRADES closed trades.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date
 from itertools import groupby
 from typing import Optional
 
@@ -17,6 +17,7 @@ import pandas as pd
 from marketscanner.backtest.engine import AccountConfig, LOSS, OPEN, SKIPPED, Trade, WIN
 from marketscanner.backtest.equity import max_drawdown
 from marketscanner.backtest.ideas import SessionInfo
+from marketscanner.data import market_calendar
 from marketscanner.data.backfill import BackfillReport
 
 MIN_TRUSTWORTHY_TRADES = 100
@@ -156,29 +157,26 @@ def _hold(minutes: Optional[float], sessions: Optional[float]) -> str:
     return f"{h}h {m:02d}m of trading time, {sessions:.1f} sessions"
 
 
-def _span(days: list[date]) -> str:
-    """One date as is; a consecutive run as "first to last (N sessions)"."""
+def _span(days: list[date], unit: str = "sessions") -> str:
+    """One date as is; a consecutive run as "first to last (N <unit>)"."""
     if len(days) == 1:
         return str(days[0])
-    return f"{days[0]} to {days[-1]} ({len(days)} sessions)"
+    return f"{days[0]} to {days[-1]} ({len(days)} {unit})"
 
 
-def _weekday_runs(days: list[date]) -> list[list[date]]:
-    """Split sorted dates into runs of back-to-back weekdays (Friday -> Monday counts)."""
+def _session_runs(days: list[date]) -> list[list[date]]:
+    """Split sorted dates into runs of back-to-back NYSE sessions (a weekend or holiday in between is fine)."""
+    if not days:
+        return []
+    order = {d: i for i, d in enumerate(sorted(market_calendar.sessions(days[0], days[-1])))}
     runs: list[list[date]] = []
     for d in days:
-        if runs and _next_weekday(runs[-1][-1]) == d:
+        prev = runs[-1][-1] if runs else None
+        if prev is not None and prev in order and d in order and order[d] == order[prev] + 1:
             runs[-1].append(d)
         else:
             runs.append([d])
     return runs
-
-
-def _next_weekday(d: date) -> date:
-    d += timedelta(days=1)
-    while d.weekday() >= 5:
-        d += timedelta(days=1)
-    return d
 
 
 def format_coverage(cov: Coverage) -> str:
@@ -192,7 +190,7 @@ def format_coverage(cov: Coverage) -> str:
         for is_gap, run in groupby(ss, key=lambda s: s.status == "no_data"):
             run = list(run)
             if is_gap:
-                lines.append(f"    no data {_span([s.date for s in run])} (holiday or not stored)")
+                lines.append(f"    no data {_span([s.date for s in run], 'weekdays')} (holiday or not stored)")
                 continue
             for s in run:
                 if s.status == "skipped_opening_hole":
@@ -204,8 +202,11 @@ def format_coverage(cov: Coverage) -> str:
         lines.append(f"  fetched from yfinance this run: {len(bf.fetched) - bf.deep_fetched} session(s)")
         if bf.deep_fetched:
             lines.append(f"  fetched from Alpaca this run: {bf.deep_fetched} session(s)")
-        for (sym, why), run in groupby(bf.unavailable, key=lambda u: (u[0], u[2])):
-            for days in _weekday_runs([d for _, d, _ in run]):
+        if bf.deep_stopped:
+            lines.append(f"  ! Alpaca stopped for the rest of this run: {bf.deep_stopped}")
+        ordered = sorted(bf.unavailable, key=lambda u: (u[0], u[2], u[1]))
+        for (sym, why), run in groupby(ordered, key=lambda u: (u[0], u[2])):
+            for days in _session_runs([d for _, d, _ in run]):
                 lines.append(f"    unavailable {sym} {_span(days)}: {why}")
         for sym, d, n in bf.incomplete:
             lines.append(f"    incomplete {sym} {d}: only {n} bars from the vendor")
