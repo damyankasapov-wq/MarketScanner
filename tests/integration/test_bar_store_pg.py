@@ -61,3 +61,10 @@ def test_after_midnight_utc_bar_is_the_earlier_et_session(pg):
     pg.upsert_bars("SPY", df_of([bar("2024-11-07 00:30", 1, 1, 1, 1)]))
     assert pg.session_counts("SPY", D1, D2) == {D1: 1}
     assert len(pg.load("SPY", D1, D1)) == 1 and pg.load("SPY", D2, D2).empty
+
+
+def test_replace_session_owns_the_day(pg):
+    pg.upsert_bars("SPY", pd.concat([df_of(flat("2024-11-06 16:00", 5, 1.0)), df_of(flat("2024-11-07 14:30", 3, 1.0))]))
+    assert pg.replace_session("SPY", D1, df_of(flat("2024-11-06 14:30", 4, 2.0))) == 4
+    assert pg.session_counts("SPY", D1, D2) == {D1: 4, D2: 3}
+    assert set(pg.load("SPY", D1, D1)["close"]) == {2.0}

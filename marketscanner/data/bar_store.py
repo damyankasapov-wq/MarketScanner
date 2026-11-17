@@ -33,6 +33,9 @@ class BarStore(Protocol):
     def upsert_bars(self, symbol: str, df: pd.DataFrame) -> int:
         """Insert or replace bars (the latest row per (symbol, ts) wins). Returns rows written."""
 
+    def replace_session(self, symbol: str, session_date: date, df: pd.DataFrame) -> int:
+        """Delete every bar of that New York session, then insert `df`, as one unit. Returns rows written."""
+
     def load(self, symbol: str, start: date, end: date) -> pd.DataFrame:
         """All bars whose New York date is in [start, end] inclusive, ascending."""
 
@@ -92,6 +95,13 @@ class InMemoryBarStore:
         merged = merged[~merged.index.duplicated(keep="last")].sort_index()
         self._frames[symbol] = merged
         return len(new)
+
+    def replace_session(self, symbol: str, session_date: date, df: pd.DataFrame) -> int:
+        old = self._frames.get(symbol)
+        if old is not None and not old.empty:
+            lo, hi = et_date_bounds_utc(session_date, session_date)
+            self._frames[symbol] = old[(old.index < lo) | (old.index >= hi)]
+        return self.upsert_bars(symbol, df)
 
     def load(self, symbol: str, start: date, end: date) -> pd.DataFrame:
         df = self._frames.get(symbol)

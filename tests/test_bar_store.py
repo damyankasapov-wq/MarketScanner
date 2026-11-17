@@ -201,3 +201,33 @@ class TestPostgresSql:
         with pytest.raises(RuntimeError, match="boom"):
             _pg(conn).upsert_bars("SPY", _session("2024-11-06 14:30", 2))
         assert conn.rollbacks == 1 and conn.commits == 0 and conn.puts == 1
+
+
+class TestReplaceSession:
+    """replace_session: one vendor owns a session (found by /ship review, 2026-11-17)."""
+
+    def test_in_memory_replaces_only_that_session(self):
+        s = InMemoryBarStore()
+        s.upsert_bars("SPY", pd.concat([_session("2024-11-06 16:00", 5, 1.0), _session("2024-11-07 14:30", 4, 1.0)]))
+        assert s.replace_session("SPY", D1, _session("2024-11-06 14:30", 3, 2.0)) == 3
+        assert s.session_counts("SPY", D1, D2) == {D1: 3, D2: 4}
+        assert set(s.load("SPY", D1, D1)["close"]) == {2.0}
+
+    def test_in_memory_on_empty_symbol(self):
+        s = InMemoryBarStore()
+        assert s.replace_session("SPY", D1, _session("2024-11-06 14:30", 2)) == 2
+
+    def test_postgres_deletes_then_inserts_in_one_transaction(self):
+        conn = FakeConn()
+        assert _pg(conn).replace_session("SPY", D1, _session("2024-11-06 14:30", 3)) == 3
+        (del_sql, del_params), (ins_sql, _) = conn.executed
+        assert del_sql == "DELETE FROM bars WHERE symbol = %s AND ts >= %s AND ts < %s"
+        assert del_params == ("SPY", pd.Timestamp("2024-11-06 05:00", tz="UTC").to_pydatetime(),
+                              pd.Timestamp("2024-11-07 05:00", tz="UTC").to_pydatetime())
+        assert ins_sql.startswith("INSERT INTO bars") and conn.commits == 1 and conn.puts == 1
+
+    def test_postgres_failure_rolls_back_the_delete(self):
+        conn = FakeConn(fail=True)
+        with pytest.raises(RuntimeError):
+            _pg(conn).replace_session("SPY", D1, _session("2024-11-06 14:30", 3))
+        assert conn.commits == 0 and conn.rollbacks == 1
