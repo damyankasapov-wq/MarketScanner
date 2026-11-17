@@ -28,7 +28,7 @@ _ET = pytz.timezone(config.TIMEZONE)
 
 BARS_URL = "https://data.alpaca.markets/v2/stocks/{symbol}/bars"
 PAGE_LIMIT = 10_000      # Alpaca's maximum bars per page
-MAX_RETRIES = 5          # on HTTP 429 (free plan: 200 requests/minute)
+MAX_RETRIES = 5          # on HTTP 429 (free plan: 200 requests/minute) and 5xx
 TIMEOUT_S = 30
 
 
@@ -98,9 +98,10 @@ def _et_midnight(d: date) -> pd.Timestamp:
 def _get(http, url, headers, params, sleep) -> dict:
     for attempt in range(MAX_RETRIES + 1):
         resp = http.get(url, headers=headers, params=params, timeout=TIMEOUT_S)
-        if resp.status_code == 429 and attempt < MAX_RETRIES:
+        retryable = resp.status_code == 429 or resp.status_code >= 500
+        if retryable and attempt < MAX_RETRIES:
             wait = float(resp.headers.get("Retry-After") or 2 ** attempt)
-            log.info("alpaca rate limited, retrying in %.0fs", wait)
+            log.info("alpaca HTTP %s, retrying in %.0fs", resp.status_code, wait)
             sleep(wait)
             continue
         if resp.status_code != 200:
