@@ -1,4 +1,4 @@
-"""ensure_bars: fetch only what is missing, one weekday per request, report what cannot be had."""
+"""ensure_bars: fetch only what is missing (one session per yfinance request, one month per deep request), report what cannot be had."""
 from datetime import date, timedelta
 
 import pandas as pd

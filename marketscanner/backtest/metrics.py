@@ -205,10 +205,12 @@ def format_coverage(cov: Coverage) -> str:
         if bf.deep_stopped:
             lines.append(f"  ! Alpaca stopped for the rest of this run: {bf.deep_stopped}")
         ordered = sorted(bf.unavailable, key=lambda u: (u[0], u[2], u[1]))
-        for (sym, why), run in groupby(ordered, key=lambda u: (u[0], u[2])):
-            for days in _session_runs([d for _, d, _ in run]):
-                lines.append(f"    unavailable {sym} {_span(days)}: {why}")
-        for sym, d, n in bf.incomplete:
+        runs = [(sym, days, why)
+                for (sym, why), group in groupby(ordered, key=lambda u: (u[0], u[2]))
+                for days in _session_runs([d for _, d, _ in group])]
+        for sym, days, why in sorted(runs, key=lambda r: (r[0], r[1][0])):
+            lines.append(f"    unavailable {sym} {_span(days)}: {why}")
+        for sym, d, n in sorted(bf.incomplete):
             lines.append(f"    incomplete {sym} {d}: only {n} bars from the vendor")
     return "\n".join(lines)
 

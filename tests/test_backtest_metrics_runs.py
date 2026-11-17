@@ -8,17 +8,17 @@ from datetime import date
 from marketscanner.backtest.metrics import Coverage, format_coverage
 from marketscanner.data.backfill import BackfillReport
 
-HOLIDAY = "no data returned (holiday?)"
+from marketscanner.data.backfill import REASON_NO_DATA
 
 
 def _lines(unavailable):
     return format_coverage(Coverage(sessions=[], backfill=BackfillReport(unavailable=unavailable))).splitlines()
 
 
-def test_separate_holidays_stay_separate_lines():
-    days = [date(2026, 5, 25), date(2026, 6, 19), date(2026, 7, 3), date(2026, 9, 7)]
-    lines = _lines([("SPY", d, HOLIDAY) for d in days])
-    assert [l for l in lines if "unavailable" in l] == [f"    unavailable SPY {d}: {HOLIDAY}" for d in days]
+def test_sessions_far_apart_stay_separate_lines():
+    days = [date(2026, 5, 26), date(2026, 6, 18), date(2026, 7, 6), date(2026, 9, 8)]
+    lines = _lines([("SPY", d, REASON_NO_DATA) for d in days])
+    assert [l for l in lines if "unavailable" in l] == [f"    unavailable SPY {d}: {REASON_NO_DATA}" for d in days]
 
 
 def test_friday_to_monday_is_one_run_but_a_skipped_weekday_breaks_it():
@@ -46,3 +46,17 @@ def test_deep_stop_is_reported_once():
     rep = BackfillReport(deep_stopped="HTTP 401 (check the Alpaca keys)")
     text = format_coverage(Coverage(sessions=[], backfill=rep))
     assert text.count("Alpaca stopped for the rest of this run: HTTP 401") == 1
+
+
+def test_mixed_reasons_are_printed_in_date_order():
+    lines = _lines([("SPY", date(2025, 6, 3), "Alpaca fetch failed: boom"),
+                    ("SPY", date(2015, 6, 3), "no data from Alpaca (before its 2016 history?)")])
+    got = [l for l in lines if "unavailable" in l]
+    assert got[0].startswith("    unavailable SPY 2015-06-03") and got[1].startswith("    unavailable SPY 2025-06-03")
+
+
+def test_incomplete_lines_are_sorted():
+    rep = BackfillReport(incomplete=[("SPY", date(2026, 11, 5), 289), ("GLD", date(2026, 11, 5), 289),
+                                     ("SPY", date(2026, 10, 1), 300)])
+    got = [l for l in format_coverage(Coverage(sessions=[], backfill=rep)).splitlines() if "incomplete" in l]
+    assert [l.split()[1:3] for l in got] == [["GLD", "2026-11-05:"], ["SPY", "2026-10-01:"], ["SPY", "2026-11-05:"]]
