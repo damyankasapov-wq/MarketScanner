@@ -113,7 +113,11 @@ def run(
         result = generate_ideas(store, strategy, symbols, start, end)
     except Exception as exc:  # noqa: BLE001 - one clear message beats a traceback here
         print(f"Cannot use the bars store: {exc!r}\n"
+              f"Using DB_HOST={config.DB['host']} DB_PORT={config.DB['port']} DB_NAME={config.DB['dbname']}.\n"
               "Check DB_HOST / DB_PORT / DB_NAME / DB_USER / DB_PASSWORD (see .env.example).", file=sys.stderr)
+        if not config.ENV_FILE.exists():
+            print(f"No .env found at {config.ENV_FILE}, so the defaults above are in use. A git worktree does not "
+                  "get a copy of .env: copy it from the main checkout.", file=sys.stderr)
         return 2
 
     exits = find_exits(result.ideas, result.frames)
