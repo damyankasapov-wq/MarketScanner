@@ -37,8 +37,8 @@ class OpeningRangeStrategy(Strategy):
             now = datetime.now(timezone.utc)
 
         snap = orb_session.snapshot(df, now=now)
-        if snap.box is None:
-            return None
+        if snap.box is None or not snap.range_final:
+            return None   # nothing to judge until 10:30 ET (a lone 09:30 bar can look flat)
         if self._fired_session == snap.session_date:
             return None   # one signal per symbol per day
 
