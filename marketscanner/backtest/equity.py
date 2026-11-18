@@ -13,8 +13,6 @@ data holes.
 """
 from __future__ import annotations
 
-from functools import reduce
-
 import numpy as np
 import pandas as pd
 
@@ -24,18 +22,31 @@ COLUMNS = ["cash", "invested", "unrealised", "equity"]
 
 
 def sample_grid(trades: list[Trade], frames: dict[str, pd.DataFrame]) -> pd.DatetimeIndex:
-    parts = []
+    """
+    Every 5-minute bar of every frame, each frame's last bar (period end: marks
+    equal each trade's mark_price) and every trade open/close, sorted and unique.
+    Built in one step from int64 nanoseconds: unioning one timestamp at a time
+    re-sorted the whole grid per trade event (~30 s on a 10-year grid).
+
+    Same timestamps as the old union for the UTC, duplicate-free frames the
+    store returns; the result is always UTC at nanosecond resolution, and
+    duplicate bar timestamps collapse to one point. Trade times must be
+    timezone-aware (a naive one raises, as before).
+    """
+    parts: list[np.ndarray] = []
     for f in frames.values():
         if len(f):
-            parts.append(f.index[f.index.minute % 5 == 0])
-            parts.append(f.index[-1:])          # period end: marks equal each trade's mark_price
-    for t in trades:
-        for ts in (t.opened_at, t.closed_at):
-            if ts is not None:
-                parts.append(pd.DatetimeIndex([pd.Timestamp(ts)]).tz_convert("UTC"))
+            idx = f.index.tz_convert("UTC").as_unit("ns")
+            parts.append(idx[idx.minute % 5 == 0].asi8)
+            parts.append(idx[-1:].asi8)
+    events = [pd.Timestamp(ts).tz_convert("UTC").value
+              for t in trades for ts in (t.opened_at, t.closed_at) if ts is not None]
+    if events:
+        parts.append(np.asarray(events, dtype=np.int64))
     if not parts:
         return pd.DatetimeIndex([], tz="UTC")
-    return reduce(lambda a, b: a.union(b), parts).sort_values()
+    values = np.unique(np.concatenate(parts))
+    return pd.DatetimeIndex(values.view("datetime64[ns]")).tz_localize("UTC")
 
 
 def build_equity(trades: list[Trade], frames: dict[str, pd.DataFrame], cfg: AccountConfig) -> pd.DataFrame:
@@ -45,7 +56,7 @@ def build_equity(trades: list[Trade], frames: dict[str, pd.DataFrame], cfg: Acco
         return pd.DataFrame(columns=COLUMNS, index=pd.DatetimeIndex([], tz="UTC"), dtype="float64")
 
     marks = {s: f["close"].reindex(grid, method="ffill").to_numpy() for s, f in frames.items() if len(f)}
-    realised = np.zeros(n)
+    realised_delta = np.zeros(n + 1)    # realised P&L steps up at each close; cumsum once at the end
     invested = np.zeros(n)
     unreal = np.zeros(n)
     for t in trades:
@@ -59,7 +70,8 @@ def build_equity(trades: list[Trade], frames: dict[str, pd.DataFrame], cfg: Acco
             m = np.where(np.isnan(m), t.entry, m)
             unreal[i0:i1] += t.sign * t.shares * (m - t.entry)
         if t.closed_at is not None:
-            realised[i1:] += t.pnl
+            realised_delta[i1] += t.pnl
+    realised = np.cumsum(realised_delta[:n])
     out = pd.DataFrame(
         {
             "cash": cfg.initial_cash + realised - invested,
