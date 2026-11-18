@@ -2,6 +2,18 @@
 
 All notable changes to MarketScanner are documented here.
 
+## [0.6.1.0] - 2026-11-18
+
+### Fixed
+- **The dashboard no longer shows a box as settled while the opening range is still forming.**
+  From 09:30 to 10:30 ET each card now reads "building range until 10:30 ET · so far
+  344.85–346.31" instead of "waiting for confirmation · box …" with numbers that kept moving.
+  `/status/<symbol>` gains `range_final`. The range counts as final once a bar at or after 10:30
+  ET arrives, or 90 s (`CANDLE_GRACE_SECONDS`) after 10:30 when the feed has a gap.
+- **No more false "flat opening range, no proposal today" warning at the open.** The live scanner
+  used to log it for every symbol at 09:30, because the first bar can have the same high and low.
+  It now judges the range only after 10:30 ET. Alerts were never affected.
+
 ## [0.6.0.0] - 2026-11-18
 
 ### Added
