@@ -27,11 +27,11 @@ Scope accepted for the strategy checker (from /plan-eng-review, 2026-11-16): lay
 
 **Why:** Today only the candle size can be changed (env var); comparing settings needs code edits and gives no protection against fitting the past.
 
-**Context:** Print trade count per variant, an in-sample / out-of-sample split (first two thirds / last third) and label the top variant "in-sample best". Needs `reward_ratio` and a confirmation cut-off argument added to `snapshot` / `build_proposal` with defaults equal to today's behaviour so live alerts are unchanged. Exits are account-independent: compute once per idea and reuse across variants. Do not trust any sweep below ~100 closed trades; wait for the bars archive to accumulate (the Alpaca backfill now provides years of history).
+**Context:** Designed and reviewed on 2026-11-18: `~/.gstack/projects/damyankasapov-wq-MarketScanner/damya-claude-office-hours-todos-38e5ad-design-20261118-003041.md` (the "Eng Review Decisions" section at its end wins over the earlier sections). The speed prerequisite shipped in v0.4.1.0. The sweep itself is backtest-only: reward and cut-off are applied after a plain `propose()` through `OrbStrategy.derive`, so `snapshot` and live alerts stay unchanged. Each variant is compared with the current .env settings, as a paired R difference in-sample and out-of-sample with a verdict rule fixed in code, plus BUY R / SELL R columns. Exits are account-independent: compute once per (candle, reward) and reuse across cut-offs.
 
 **Effort:** M
 **Priority:** P2
-**Depends on:** layers 0+1 shipped
+**Depends on:** layers 0+1 shipped; backtester speed-up (v0.4.1.0)
 
 ### Splits and dividends in multi-day holds
 
@@ -57,6 +57,30 @@ Scope accepted for the strategy checker (from /plan-eng-review, 2026-11-16): lay
 **Priority:** P2
 **Depends on:** layer 1 engine
 **Blocked by:** your broker's real commission and whether SPY/QQQ/GLD can be shorted at all
+
+### Sweep: choose which third is out-of-sample
+
+**What:** A sweep option to make the first third of the period out-of-sample (`--oos first|last`, default last), or to exclude dates already inspected (e.g. `--burned 2026-10-19:2026-11-13`), with the OOS dates printed in the banner.
+
+**Why:** The cut-off idea and its 13:00 / 14:00 grid values came from looking at GLD on 2026-10-21 and 11-03, and backtests were run on 2026-10-19 to 11-13. All of that sits in the last third, which the sweep treats as unseen data, so a cut-off "confirmed out-of-sample" was partly chosen from those sessions.
+
+**Context:** Raised by the outside voice in /plan-eng-review on 2026-11-18 (D14); the owner deferred it here. The sweep design keeps the chronological last-third split. Until this ships, read an OOS result for the cut-off with that caveat. Design: `~/.gstack/projects/damyankasapov-wq-MarketScanner/damya-claude-office-hours-todos-38e5ad-design-20261118-003041.md`.
+
+**Effort:** S
+**Priority:** P2
+**Depends on:** settings sweep (layer 3)
+
+### Sweep: walk-forward and neighbour robustness
+
+**What:** Instead of one 2/3-1/3 split, roll year by year: pick the in-sample best on year N, score it on year N+1, and chain the picks into one out-of-sample record. Add a neighbour score per grid cell (a cell only counts as good if adjacent settings are good too).
+
+**Why:** With years of Alpaca history, a single split is a weak guard; walk-forward is the most honest answer to "would choosing settings this way have worked?", and isolated lucky cells are the typical overfit signature.
+
+**Context:** Approach C in the settings sweep design (office-hours, 2026-11-18), deferred until the cached-grid sweep shows a variant worth checking. Reuses the sweep's cached ideas and exits; only the split and scoring change. Meaningless on a single month.
+
+**Effort:** L
+**Priority:** P3
+**Depends on:** settings sweep (layer 3)
 
 ## Strategy (ORB)
 
