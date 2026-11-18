@@ -29,6 +29,7 @@ h1{font-size:1.4rem;margin:0 0 4px}h2{font-size:1.1rem;margin:28px 0 8px}
 img{max-width:100%;height:auto;border-radius:6px;border:1px solid var(--line)}
 table{border-collapse:collapse;width:100%;font-size:.85rem}th,td{padding:5px 8px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
 th:nth-child(-n+4),td:nth-child(-n+4){text-align:left}
+.mkt{width:auto;min-width:min(100%,560px);font-size:.9rem}.mkt th,.mkt td{text-align:right}.mkt th:first-child,.mkt td:first-child{text-align:left}
 .wrap{overflow-x:auto}.WIN{color:var(--win)}.LOSS{color:var(--loss)}.OPEN{color:var(--open)}.SKIPPED{color:var(--mut)}
 figure{margin:0 0 22px}figcaption{margin-top:6px;font-size:.88rem}
 pre{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px;overflow-x:auto;font-size:.8rem;white-space:pre-wrap;overflow-wrap:anywhere}
@@ -54,6 +55,28 @@ def _cards(s: Summary) -> str:
         ("Average invested", f"{s.avg_invested_pct:.1f}% of equity"),
     ]
     return '<div class="grid">' + "".join(f'<div class="card"><b>{_E(v)}</b><span>{_E(k)}</span></div>' for k, v in items) + "</div>"
+
+
+def _markets(s: Summary) -> str:
+    """By-market table, best P&L first. P&L includes open trades marked at the last close."""
+    if not s.by_symbol:
+        return ""
+    any_skipped = any(d["skipped"] for d in s.by_symbol.values())
+    cols = ["Market", "Trades", "Wins / losses", "Win rate", "P&L"] + (["Skipped (cash)"] if any_skipped else [])
+    rows = []
+    for sym, d in sorted(s.by_symbol.items(), key=lambda kv: -kv[1]["pnl"]):
+        closed = d["wins"] + d["losses"]
+        wl = f"{d['wins']} / {d['losses']}" + (f", {d['open']} open" if d["open"] else "")
+        rate = f"{100 * d['wins'] / closed:.1f}%" if closed else "n/a"
+        cls = "WIN" if d["pnl"] > 0 else "LOSS" if d["pnl"] < 0 else ""
+        cells = [_E(sym), str(d["signals"] - d["skipped"]), _E(wl), rate,
+                 f'<span class="{cls}">{d["pnl"]:+,.2f}</span>']
+        if any_skipped:
+            cells.append(str(d["skipped"]))
+        rows.append("<tr>" + "".join(f"<td>{c}</td>" for c in cells) + "</tr>")
+    head = "".join(f"<th>{_E(c)}</th>" for c in cols)
+    return (f'<h2>By market</h2><div class="wrap"><table class="mkt"><thead><tr>{head}</tr></thead>'
+            f'<tbody>{"".join(rows)}</tbody></table></div>')
 
 
 def _caption(t: Trade, chart_error: Optional[str]) -> str:
@@ -120,6 +143,7 @@ def build_html(
 minimum cash {_money(summary.min_cash)}. Informational only: a simulation on stored 1-minute bars, not an order.</p>
 {f'<p class="sub">{_E(note)}</p>' if note else ''}{_cards(summary)}
 {warnings}
+{_markets(summary)}
 <h2>Account</h2>
 <img src="data:image/png;base64,{equity}" alt="account: cash, invested and total equity">
 <h2>Ledger</h2>
