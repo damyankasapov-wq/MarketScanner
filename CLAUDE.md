@@ -19,6 +19,10 @@ proposal; Flask dashboard on port 8080. Informational only, nothing trades.
   calendar (`marketscanner/data/market_calendar.py`: holidays skipped, half-days cut at 13:00 ET).
   Output goes to `output/backtest/<run>/`; `--gallery none` skips the per-trade charts (most of the
   run time and disk). A git worktree has no `.env` (it's gitignored): copy it from the main checkout.
+- One run with other ORB settings: `--candle N --reward X --cutoff HH:MM|none` (defaults = live
+  behaviour). Compare settings: add `--sweep` with comma lists; `marketscanner/backtest/sweep.py`
+  holds the in-sample / out-of-sample split and the fixed verdict rule, applied through
+  `OrbStrategy.derive` (`marketscanner/backtest/strategy.py`), so live `snapshot` is untouched.
 - Real-Postgres test for the bars table (opt-in): `MS_TEST_DB=1 pytest tests/integration`.
 
 ## Skill routing
