@@ -85,14 +85,17 @@ def banner(result: SweepResult, rerun: Optional[str] = None) -> list[str]:
 
 
 def table_lines(result: SweepResult, rows: list[Row]) -> list[str]:
-    head = (f"{'#':>3} {'c / r / cut-off':<17} {'IS n':>5} {'IS avg R':>15} {'OOS n':>5} {'OOS avg R':>15} "
-            f"{'IS ΔR':>15} {'OOS ΔR':>15} {'IS→OOS':>6} {'BUY R':>7} {'SELL R':>7} {'P&L':>10} {'DD%':>7}  mark")
+    """ASCII cells, padded after translation: '±' becomes the 3-character '+/-', so translating
+    afterwards would push every wide row out of its column."""
+    a = lambda text: text.translate(_ASCII)  # noqa: E731
+    head = (f"{'#':>3} {'c / r / cut-off':<17} {'IS n':>5} {'IS avg R':>16} {'OOS n':>5} {'OOS avg R':>16} "
+            f"{'IS dR':>18} {'OOS dR':>18} {'IS->OOS':>7} {'BUY R':>7} {'SELL R':>7} {'P&L':>10} {'DD%':>7}  mark")
     out = [head, "-" * len(head)]
     for r in rows:
         s = r.summary
         out.append(
-            f"{r.rank_is:>3} {r.settings.short():<17} {r.is_.closed:>5} {_avg(r.is_):>15} {r.oos.closed:>5} "
-            f"{_avg(r.oos):>15} {_pm(r.d_is, r.se_d_is):>15} {_pm(r.d_oos, r.se_d_oos):>15} {r.is_to_oos:>6} "
+            f"{r.rank_is:>3} {r.settings.short():<17} {r.is_.closed:>5} {a(_avg(r.is_)):>16} {r.oos.closed:>5} "
+            f"{a(_avg(r.oos)):>16} {a(_pm(r.d_is, r.se_d_is)):>18} {a(_pm(r.d_oos, r.se_d_oos)):>18} {r.is_to_oos:>7} "
             f"{r.buy_r:>+7.1f} {r.sell_r:>+7.1f} "
             f"{(s.net_pnl if s else 0):>10,.2f} {(s.max_drawdown_pct if s else 0):>7.2f}  {mark(r, result)}"
         )
