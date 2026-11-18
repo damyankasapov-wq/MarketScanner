@@ -33,11 +33,13 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 import pytz
 
 from marketscanner import config
 from marketscanner.backtest.strategy import TradeIdea
+from marketscanner.data.sessions import et_day_codes, session_start_mask, session_starts
 from marketscanner.strategies.orb_session import ExitHit, walk_exit
 
 _ET = pytz.timezone(config.TIMEZONE)
@@ -85,16 +87,71 @@ class Trade:
         return 1 if self.side == "BUY" else -1
 
 
+# Exit walk windows, in sessions from the entry session: most trades close within a
+# few sessions, so the walk looks at a short prefix first and widens about 5x on each
+# miss, so a long hold costs roughly its own length, not the rest of the period.
+EXIT_WINDOWS = (1, 6, 26, 130, 650)
+
+
+class _ExitIndex:
+    """Per-symbol facts the exit walk needs, computed once per frame instead of once per idea."""
+
+    def __init__(self, frame: pd.DataFrame) -> None:
+        if not frame.index.is_monotonic_increasing:
+            raise ValueError("find_exits needs bars sorted by time (load them with load_frames)")
+        self.frame = frame
+        self.starts, _ = session_starts(frame.index)
+        self.days = et_day_codes(frame.index)
+        self.first_bar = session_start_mask(frame.index)
+
+
+def _walk_one(ix: _ExitIndex, idea: TradeIdea) -> Optional[ExitHit]:
+    """
+    Walk prefix windows frame[start : start of session j + w] for w in EXIT_WINDOWS,
+    then the whole remainder. Each window is a prefix of the same slice, and
+    walk_exit returns the FIRST touching bar, so a hit inside a window is exactly
+    the hit of the full walk; a miss on the full remainder is None, as before.
+
+    The gap mask is the frame's session-start mask, except on the slice's first
+    bar, which counts as a new session only if its date differs from the entry
+    session (walk_exit's own rule, and what makes a 16:00 entry whose first walked
+    bar is the next day's 09:30 gap correctly).
+
+        frame   ... | entry session ...[start]... | s+1 | s+2 ... s+6 | ... | end
+        w=1               [start ------------)
+        w=6               [start ------------------------------------)
+        last              [start -------------------------------------------------)
+    """
+    frame = ix.frame
+    n = len(frame)
+    start = int(frame.index.searchsorted(pd.Timestamp(idea.signal_ts)))
+    if start >= n:
+        return None
+    first_is_new = bool(ix.days[start] != np.datetime64(idea.session_date, "D"))
+    j = int(np.searchsorted(ix.starts, start, side="right")) - 1
+    hit, end = None, start
+    windows = iter(EXIT_WINDOWS)
+    while hit is None and end < n:
+        w = next(windows, None)
+        end = n if w is None or j + w >= len(ix.starts) else int(ix.starts[j + w])
+        mask = ix.first_bar[start:end].copy()
+        mask[0] = first_is_new
+        hit = walk_exit(
+            frame.iloc[start:end], idea.side, idea.take_profit, idea.stop_loss,
+            gap_fills=True, entry_session=idea.session_date, first_of_session=mask,
+        )
+    return hit
+
+
 def find_exits(ideas: list[TradeIdea], frames: dict[str, pd.DataFrame]) -> list[Optional[ExitHit]]:
     """One exit (or None) per idea. Exits do not depend on the account, so this runs once."""
+    index: dict[str, _ExitIndex] = {}
     exits: list[Optional[ExitHit]] = []
     for idea in ideas:
-        frame = frames[idea.symbol]
-        start = frame.index.searchsorted(pd.Timestamp(idea.signal_ts))
-        exits.append(walk_exit(
-            frame.iloc[start:], idea.side, idea.take_profit, idea.stop_loss,
-            gap_fills=True, entry_session=idea.session_date,
-        ))
+        ix = index.get(idea.symbol)
+        if ix is None:
+            ix = index[idea.symbol] = _ExitIndex(frames[idea.symbol])
+        exits.append(_walk_one(ix, idea))
     return exits
 
 
@@ -107,8 +164,8 @@ class _SessionIndex:
 
     def __init__(self, frame: pd.DataFrame) -> None:
         self.idx = frame.index
-        dates = pd.Index(frame.index.tz_convert(_ET).date) if len(frame) else pd.Index([])
-        self.sessions = sorted(set(dates))
+        # session_starts lists every date at least once even on unsorted input.
+        self.sessions = sorted(set(session_starts(frame.index)[1]))
 
     def minutes(self, a: datetime, b: Optional[datetime]) -> int:
         lo = self.idx.searchsorted(pd.Timestamp(a))

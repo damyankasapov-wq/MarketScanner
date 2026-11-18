@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 import pytz
 
@@ -275,6 +276,7 @@ def walk_exit(
     stop_loss: float,
     gap_fills: bool = False,
     entry_session: Optional[date] = None,
+    first_of_session: Optional[np.ndarray] = None,
 ) -> Optional[ExitHit]:
     """
     The one take-profit / stop-loss rule, shared by the dashboard outcome and the
@@ -284,15 +286,25 @@ def walk_exit(
     stop_loss. SELL mirrored. Both touched inside one bar counts as the stop
     (conservative). Exit price is the level itself.
 
-    Gap fills (backtest only, `gap_fills=True`, needs `entry_session`): on the
+    Gap fills (backtest only, `gap_fills=True`, needs `entry_session` or a
+    precomputed `first_of_session`): on the
     first bar of a session later than the entry session, if the bar already
     OPENS beyond a level (BUY: open <= stop_loss or open >= take_profit; SELL
     mirrored) the trade fills at that open ("GAP_SL" / "GAP_TP"), because the
     open comes before anything else in the bar. A data hole inside a session is
     not treated as a gap (known limitation): the exit fills at the level.
 
+    `first_of_session` (optional, gap fills only): a precomputed boolean array,
+    one entry per bar, True where the bar is the first bar of a session later
+    than the entry session. The backtester passes it so the walk does not
+    re-derive New York dates for every bar on every call; without it the mask is
+    computed here from `entry_session`, exactly as before. Passing a mask without
+    gap fills is an error (it would be silently ignored).
+
     Returns None if no level is touched.
     """
+    if first_of_session is not None and not gap_fills:
+        raise ValueError("walk_exit: first_of_session is only used with gap_fills=True")
     if bars.empty:
         return None
     buy = side == "BUY"
@@ -305,11 +317,16 @@ def walk_exit(
 
     gap_sl = gap_tp = None
     if gap_fills:
-        if entry_session is None:
-            raise ValueError("walk_exit: gap_fills=True needs entry_session")
-        sess = pd.Index(bars.index.tz_convert(_ET).date)
-        prev = pd.Index([entry_session]).append(sess[:-1])
-        first_of_session = sess != prev
+        if first_of_session is not None:
+            first_of_session = np.asarray(first_of_session, dtype=bool)
+            if len(first_of_session) != len(bars):
+                raise ValueError("walk_exit: first_of_session must have one entry per bar")
+        else:
+            if entry_session is None:
+                raise ValueError("walk_exit: gap_fills=True needs entry_session")
+            sess = pd.Index(bars.index.tz_convert(_ET).date)
+            prev = pd.Index([entry_session]).append(sess[:-1])
+            first_of_session = np.asarray(sess != prev)
         if buy:
             gap_sl = first_of_session & (opn <= stop_loss).to_numpy()
             gap_tp = first_of_session & (opn >= take_profit).to_numpy()
