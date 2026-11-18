@@ -65,6 +65,9 @@ ALTER TABLE signals ADD COLUMN IF NOT EXISTS delta          NUMERIC(12,4);
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS confirm_open   TIMESTAMPTZ;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS confirm_close  TIMESTAMPTZ;
 ALTER TABLE signals ADD COLUMN IF NOT EXISTS candle_minutes SMALLINT;
+-- v0.6.0.0: the settings that made the alert (NULL on older rows = 1:1, no cut-off)
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS reward_ratio   NUMERIC(6,3);
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS cutoff_et      TIME;
 """ + bars_ddl()
 
 _pool: psycopg2.pool.SimpleConnectionPool | None = None
@@ -136,9 +139,9 @@ def log_signal(signal: Signal) -> None:
                 INSERT INTO signals (
                     market, strategy, direction, price, fired_at, box_top, box_bottom,
                     session_date, side, entry, take_profit, stop_loss, delta,
-                    confirm_open, confirm_close, candle_minutes
+                    confirm_open, confirm_close, candle_minutes, reward_ratio, cutoff_et
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     signal.market,
@@ -157,6 +160,8 @@ def log_signal(signal: Signal) -> None:
                     signal.confirm_open,
                     signal.confirm_close,
                     signal.candle_minutes,
+                    signal.reward_ratio,
+                    signal.cutoff_et,
                 ),
             )
         conn.commit()

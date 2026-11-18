@@ -8,7 +8,7 @@ account and writes a run folder with ledger.csv, equity.png, summary.txt,
 report.html and trades/*.png. Informational only: nothing places orders.
 
 ORB settings for one run: --candle N --reward X --cutoff HH:MM|none (defaults:
-this machine's .env candle size, 1:1, no cut-off, i.e. what live alerts do).
+this machine's .env CONFIRM_CANDLE_MINUTES, REWARD_RATIO and CONFIRM_CUTOFF_ET, i.e. what live alerts do).
 
 Settings sweep: add --sweep and give comma lists, e.g.
     --sweep --candle 5,10,15 --reward 1,1.5,2 --cutoff none,13:00,14:00
@@ -60,9 +60,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--candle", default=None, metavar="N[,N...]",
                    help="confirmation candle minutes (default: CONFIRM_CANDLE_MINUTES from .env)")
     p.add_argument("--reward", default=None, metavar="X[,X...]",
-                   help="take profit in box widths; the stop stays one box width (default 1)")
+                   help="take profit in box widths; the stop stays one box width (default: REWARD_RATIO from .env, else 1)")
     p.add_argument("--cutoff", default=None, metavar="HH:MM|none[,...]",
-                   help="latest ET time the confirmation candle may close; later ones give no trade (default none)")
+                   help="latest ET time the confirmation candle may close; later ones give no trade (default: CONFIRM_CUTOFF_ET from .env, else none)")
     p.add_argument("--sweep", action="store_true",
                    help="compare every combination of the --candle/--reward/--cutoff lists with the current .env settings")
     return p
@@ -126,8 +126,8 @@ def parse_settings(parser: argparse.ArgumentParser, args) -> tuple[Optional[OrbS
         try:
             settings = OrbSettings(
                 candles[0] if candles else config.CONFIRM_CANDLE_MINUTES,
-                rewards[0] if rewards else 1.0,
-                cutoffs[0] if cutoffs else None,
+                rewards[0] if rewards else config.REWARD_RATIO,
+                cutoffs[0] if lists["--cutoff"] else config.CONFIRM_CUTOFF_ET,
             )
         except ValueError as exc:
             parser.error(str(exc))
