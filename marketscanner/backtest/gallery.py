@@ -10,17 +10,16 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Optional
 
 import pandas as pd
-import pytz
 
-from marketscanner import config
 from marketscanner.backtest.engine import SKIPPED, Trade
+from marketscanner.data.sessions import session_bars, split_by_et_date
 from marketscanner.strategies.orb_session import replay_now, snapshot
 from marketscanner.ui.chart import render_chart
 
 log = logging.getLogger(__name__)
-_ET = pytz.timezone(config.TIMEZONE)
 TRADES_DIR = "trades"
 
 
@@ -29,9 +28,15 @@ def trade_chart_name(t: Trade) -> str:
 
 
 def session_frame(frame: pd.DataFrame, session_date) -> pd.DataFrame:
-    if frame.empty:
-        return frame
-    return frame[pd.Index(frame.index.tz_convert(_ET).date) == session_date]
+    """One session's bars (empty frame if the date has none)."""
+    return session_bars(frame, session_date)
+
+
+def _trade_session(split: dict[str, dict], frames: dict[str, pd.DataFrame], t: Trade) -> pd.DataFrame:
+    """The trade's entry-session bars from the pre-split sessions, splitting a symbol once if missing."""
+    if t.symbol not in split:
+        split[t.symbol] = split_by_et_date(frames[t.symbol])
+    return split[t.symbol].get(t.session_date, frames[t.symbol].iloc[0:0])
 
 
 def write_trade_charts(
@@ -39,17 +44,23 @@ def write_trade_charts(
     frames: dict[str, pd.DataFrame],
     out_dir: Path,
     candle_minutes: int,
+    sessions: Optional[dict[str, dict]] = None,
 ) -> tuple[dict[int, str], dict[int, str]]:
-    """Returns ({trade id: relative png path}, {trade id: error text})."""
+    """
+    Returns ({trade id: relative png path}, {trade id: error text}).
+    `sessions` ({symbol: {date: bars}}, e.g. Frames.sessions) skips re-splitting;
+    without it each symbol's frame is split once here.
+    """
     folder = Path(out_dir) / TRADES_DIR
     paths: dict[int, str] = {}
     errors: dict[int, str] = {}
+    split: dict[str, dict] = dict(sessions or {})
     for t in trades:
         if t.status == SKIPPED:
             continue
         try:
             folder.mkdir(parents=True, exist_ok=True)
-            df_s = session_frame(frames[t.symbol], t.session_date)
+            df_s = _trade_session(split, frames, t)
             snap = snapshot(df_s, minutes=candle_minutes, now=replay_now(t.session_date))
             fig = render_chart(snap, t.symbol)
             name = trade_chart_name(t)

@@ -2,6 +2,23 @@
 
 All notable changes to MarketScanner are documented here.
 
+## [0.4.1.0] - 2026-11-18
+
+### Changed
+- **Multi-year backtests run in seconds where they took minutes.** On 10 years of 1-minute
+  bars (about 1M per symbol), splitting the history into trading days drops from about
+  3 minutes to 0.3 s, finding each trade's exit from about 3 minutes for 800 trades to
+  1.5 s, and building the account curve from about 30 s to 0.3 s. Results are identical:
+  the same trades, exits, ledger and equity curve as before.
+- Exits are found by walking 1, 6, 26, 130 and then 650 sessions after the entry before the
+  rest of the period, so a trade's cost tracks how long it was held. Overnight gap fills
+  are unchanged, including a 15:55 confirmation whose first bar is the next day's 09:30.
+- Trade charts read each trade's day from the history split once per run, instead of
+  scanning the whole period for every chart.
+- One shared module now decides which New York trading day a bar belongs to, for the
+  backfill and the backtester alike. Bars without a timestamp are dropped, bars that arrive
+  out of order are sorted, and a strategy gets its own copy of each day's bars.
+
 ## [0.4.0.0] - 2026-11-17
 
 ### Added

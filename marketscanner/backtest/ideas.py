@@ -15,15 +15,13 @@ from datetime import date
 from typing import Optional
 
 import pandas as pd
-import pytz
 
-from marketscanner import config
 from marketscanner.backtest.strategy import BacktestStrategy, TradeIdea
 from marketscanner.data.backfill import weekdays
 from marketscanner.data.bar_store import BarStore
+from marketscanner.data.sessions import sort_bars, split_by_et_date
 from marketscanner.strategies.orb_session import orb_end_utc, session_open_utc
 
-_ET = pytz.timezone(config.TIMEZONE)
 OPENING_MIN_BARS = 57
 OPENING_EXPECTED_BARS = 60
 
@@ -45,12 +43,28 @@ class IdeasResult:
     frames: dict[str, pd.DataFrame] = field(default_factory=dict)
 
 
+@dataclass
+class Frames:
+    """Each symbol's bars for the period, loaded once, plus the same bars cut into sessions."""
+    frames: dict[str, pd.DataFrame] = field(default_factory=dict)
+    sessions: dict[str, dict[date, pd.DataFrame]] = field(default_factory=dict)
+
+
 def split_sessions(df: pd.DataFrame) -> dict[date, pd.DataFrame]:
-    """Group a UTC-indexed frame by New York session date."""
-    if df.empty:
-        return {}
-    dates = pd.Index(df.index.tz_convert(_ET).date)
-    return {d: df[dates == d] for d in sorted(set(dates))}
+    """Group a UTC-indexed frame by New York session date. Kept as an alias of the shared splitter."""
+    return split_by_et_date(df)
+
+
+def load_frames(store: BarStore, symbols: list[str], start: date, end: date) -> Frames:
+    """One query per symbol for the whole period, split into sessions once."""
+    out = Frames()
+    for symbol in symbols:
+        frame = store.load(symbol, start, end)
+        if not frame.empty:
+            frame = sort_bars(frame)
+        out.frames[symbol] = frame
+        out.sessions[symbol] = split_by_et_date(frame)
+    return out
 
 
 def opening_bar_count(df_session: pd.DataFrame, session_date: date) -> int:
@@ -73,11 +87,21 @@ def generate_ideas(
     start: date,
     end: date,
 ) -> IdeasResult:
+    """Load the period's bars (one query per symbol) and generate ideas from them."""
+    return ideas_from_frames(load_frames(store, symbols, start, end), strategy, symbols, start, end)
+
+
+def ideas_from_frames(
+    loaded: Frames,
+    strategy: BacktestStrategy,
+    symbols: list[str],
+    start: date,
+    end: date,
+) -> IdeasResult:
     result = IdeasResult()
     for symbol in symbols:
-        frame = store.load(symbol, start, end)       # one query per symbol for the whole period
-        result.frames[symbol] = frame
-        sessions = split_sessions(frame)
+        result.frames[symbol] = loaded.frames[symbol]
+        sessions = loaded.sessions[symbol]
         for d in weekdays(start, end):
             df_s = sessions.get(d)
             if df_s is None or df_s.empty:
@@ -89,7 +113,9 @@ def generate_ideas(
                 result.sessions.append(SessionInfo(symbol, d, len(df_s), opening, "skipped_opening_hole", holes))
                 continue
             result.sessions.append(SessionInfo(symbol, d, len(df_s), opening, "ok", holes))
-            idea: Optional[TradeIdea] = strategy.propose(symbol, df_s)
+            # A copy: session slices are views of the frame that find_exits and the gallery
+            # walk later, and a strategy writing into its bars must never change them.
+            idea: Optional[TradeIdea] = strategy.propose(symbol, df_s.copy())
             if idea is not None:
                 result.ideas.append(idea)
     return result

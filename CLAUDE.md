@@ -8,6 +8,8 @@ proposal; Flask dashboard on port 8080. Informational only, nothing trades.
 - Replay a past session: `python main.py --replay SPY 2026-11-11`.
 - All ORB numbers come from `marketscanner/strategies/orb_session.py` (`snapshot()`); the one
   take-profit / stop-loss rule is `walk_exit` there.
+- Which New York trading day a bar belongs to is decided only in `marketscanner/data/sessions.py`
+  (`split_by_et_date`, `session_start_mask`), shared by the backfill and the backtester.
 - Backtest a strategy on a simulated account: `python -m marketscanner.backtest --from 2026-10-19
   --to 2026-11-13 --markets SPY,QQQ,GLD --cash 10000 --per-deal 1000 --min-cash 2000` (reads the
   Postgres `bars` table via the DB_* settings, backfilling missing sessions from yfinance; the live

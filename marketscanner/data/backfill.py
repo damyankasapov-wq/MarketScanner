@@ -30,12 +30,12 @@ from datetime import date, datetime, timedelta
 from itertools import groupby
 from typing import Callable, Optional
 
-import pandas as pd
 import pytz
 
 from marketscanner import config
 from marketscanner.data import alpaca_feed, market_calendar
 from marketscanner.data.bar_store import BarStore
+from marketscanner.data.sessions import split_by_et_date
 from marketscanner.data.yfinance_feed import fetch_range
 
 log = logging.getLogger(__name__)
@@ -152,7 +152,7 @@ def _deep_backfill(store, report, symbol, missing, counts, cal, deep: _DeepState
                 _stop_deep(report, deep, f"{deep.failures} months in a row failed, last: {exc!r}")
             continue
         deep.failures = 0
-        by_day = _split_by_et_date(df)
+        by_day = split_by_et_date(df)
         for d in month:
             before = len(report.fetched)
             _store_session(store, report, symbol, d, cal[d], by_day.get(d), counts.get(d, 0), min_bars,
@@ -164,13 +164,6 @@ def _stop_deep(report: BackfillReport, deep: _DeepState, reason: str) -> None:
     log.warning("deep backfill stopped for this run: %s", reason)
     report.deep_stopped = reason
     deep.fetch = None
-
-
-def _split_by_et_date(df: Optional[pd.DataFrame]) -> dict[date, pd.DataFrame]:
-    if df is None or df.empty:
-        return {}
-    keys = df.index.tz_convert(_ET).date
-    return {d: part for d, part in df.groupby(keys)}
 
 
 def _store_session(store, report, symbol, d, sess, df, have, min_bars, replace: bool,
