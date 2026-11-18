@@ -45,10 +45,6 @@ def mark(row: Row, result: SweepResult) -> str:
     return ", ".join(tags)
 
 
-def _f(x: Optional[float], nd: int = 2) -> str:
-    return "—" if x is None else f"{x:+.{nd}f}"
-
-
 def _pm(x: Optional[float], se: Optional[float]) -> str:
     if x is None:
         return "—"

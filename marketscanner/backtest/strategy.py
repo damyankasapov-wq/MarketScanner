@@ -20,6 +20,7 @@ candle size.
 from __future__ import annotations
 
 import dataclasses
+import math
 from dataclasses import dataclass, field
 from datetime import date, datetime, time
 from typing import Optional, Protocol
@@ -62,8 +63,8 @@ class OrbSettings:
             # The config message names the env var; a --candle typo should name the setting instead.
             raise ValueError("candle minutes must divide 60 (1,2,3,4,5,6,10,12,15,20,30,60), "
                              f"got {self.candle_minutes}") from None
-        if not self.reward_ratio > 0:
-            raise ValueError(f"reward ratio must be greater than 0, got {self.reward_ratio}")
+        if not (self.reward_ratio > 0 and math.isfinite(self.reward_ratio)):
+            raise ValueError(f"reward ratio must be a finite number greater than 0, got {self.reward_ratio}")
         if self.cutoff is not None and not (EARLIEST_CUTOFF < self.cutoff <= LATEST_CUTOFF):
             raise ValueError(f"cut-off must be after 10:30 and no later than 16:00 ET, got {self.cutoff:%H:%M}")
 
@@ -86,14 +87,14 @@ class OrbSettings:
         if self.candle_minutes != 5:
             parts.append(f"c{self.candle_minutes}")
         if self.reward_ratio != 1.0:
-            parts.append(f"r{self.reward_ratio:g}")
+            parts.append(f"r{self.reward_ratio:.15g}")
         if self.cutoff is not None:
             parts.append(f"x{self.cutoff:%H%M}")
         return "_".join(parts)
 
     def cli_args(self) -> list[str]:
         cut = "none" if self.cutoff is None else f"{self.cutoff:%H:%M}"
-        return ["--candle", str(self.candle_minutes), "--reward", f"{self.reward_ratio:g}", "--cutoff", cut]
+        return ["--candle", str(self.candle_minutes), "--reward", f"{self.reward_ratio:.15g}", "--cutoff", cut]
 
 
 def parse_cutoff(text: str) -> Optional[time]:

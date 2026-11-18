@@ -152,7 +152,11 @@ def run_id(strategy: str, start: date, end: date, symbols: list[str], settings: 
 
 def rerun_command(args, start: date, end: date, symbols: list[str], settings: OrbSettings) -> str:
     parts = ["python -m marketscanner.backtest", "--from", f"{start}", "--to", f"{end}", "--markets", ",".join(symbols),
-             "--cash", f"{args.cash:g}", "--per-deal", f"{args.per_deal:g}", "--min-cash", f"{args.min_cash:g}"]
+             "--cash", f"{args.cash:.15g}", "--per-deal", f"{args.per_deal:.15g}", "--min-cash", f"{args.min_cash:.15g}"]
+    if not args.backfill:
+        parts.append("--no-backfill")
+    if args.out:
+        parts += ["--out", f'"{args.out}"' if " " in str(args.out) else str(args.out)]
     return " ".join(parts + settings.cli_args())
 
 

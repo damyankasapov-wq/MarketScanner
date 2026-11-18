@@ -70,7 +70,7 @@ class Grid:
         if self == Grid():
             return ""
         cut = "-".join("none" if x is None else f"{x:%H%M}" for x in self.cutoffs)
-        return (f"c{'-'.join(str(c) for c in self.candles)}_r{'-'.join(f'{r:g}' for r in self.rewards)}"
+        return (f"c{'-'.join(str(c) for c in self.candles)}_r{'-'.join(f'{r:.15g}' for r in self.rewards)}"
                 f"_x{cut}")
 
 
@@ -150,7 +150,13 @@ class SweepResult:
         if not w:
             return "VERDICT: no variant beats current .env (rule: OOS ΔR > 2 SE and IS ΔR > 0)."
         names = ", ".join(r.settings.short() for r in w)
-        return f"VERDICT: {len(w)} variant(s) beat current .env by the fixed rule (OOS ΔR > 2 SE and IS ΔR > 0): {names}."
+        text = f"VERDICT: {len(w)} variant(s) beat current .env by the fixed rule (OOS ΔR > 2 SE and IS ΔR > 0): {names}."
+        few = [r.settings.short() for r in w if r.too_few]
+        if few:
+            # The rule stays as approved; a winner resting on few trades is named, not filtered out.
+            text += (f" Too few trades to trust (under {MIN_TRUSTWORTHY_TRADES} closed in a half): "
+                     f"{', '.join(few)}.")
+        return text
 
 
 # ── per-idea R and statistics ────────────────────────────────────────────────
@@ -281,10 +287,11 @@ def run_sweep(
         row.d_oos, row.se_d_oos = paired_delta(v_oos, b_oos, oos_dates)
 
     order = {v: k for k, v in enumerate(variants)}
-    rows.sort(key=lambda r: (-r.d_is, order[r.settings]))
+    # On a tie the baseline ranks first: a variant that changes nothing is not an 'in-sample best'.
+    rows.sort(key=lambda r: (-r.d_is, not r.is_baseline, order[r.settings]))
     for k, r in enumerate(rows, 1):
         r.rank_is = k
-    for k, r in enumerate(sorted(rows, key=lambda r: (-r.d_oos, order[r.settings])), 1):
+    for k, r in enumerate(sorted(rows, key=lambda r: (-r.d_oos, not r.is_baseline, order[r.settings])), 1):
         r.rank_oos = k
 
     if rows and all(r.too_few for r in rows):
