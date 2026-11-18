@@ -80,7 +80,7 @@ From /qa on historical data, 2026-11-15.
 
 **Why:** Confirmations as late as 14:30 / 14:55 ET (GLD 10-21, 11-03) leave almost no session.
 
-**Context:** Pairs with the layer 3 settings sweep. First real sweep (SPY/QQQ/GLD, 2024-01-01 to 2026-11-13): a 13:00 or 14:00 cut-off did not beat no cut-off in any row, in-sample or out-of-sample.
+**Context:** Pairs with the layer 3 settings sweep. First real sweep (SPY/QQQ/GLD, 2024-01-01 to 2026-11-13): a 13:00 or 14:00 cut-off did not beat no cut-off in any row, in-sample or out-of-sample. Since v0.6.0.0 a cut-off can be set live with `CONFIRM_CUTOFF_ET` (unset = none); what is left is the decision itself.
 
 **Effort:** S
 **Priority:** P2

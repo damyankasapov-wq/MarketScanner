@@ -22,7 +22,9 @@ proposal; Flask dashboard on port 8080. Informational only, nothing trades.
 - One run with other ORB settings: `--candle N --reward X --cutoff HH:MM|none` (defaults = live
   behaviour). Compare settings: add `--sweep` with comma lists; `marketscanner/backtest/sweep.py`
   holds the in-sample / out-of-sample split and the fixed verdict rule, applied through
-  `OrbStrategy.derive` (`marketscanner/backtest/strategy.py`), so live `snapshot` is untouched.
+  `OrbStrategy.derive` (`marketscanner/backtest/strategy.py`); plain ideas always use 1:1 and no cut-off.
+- Live settings: `REWARD_RATIO` and `CONFIRM_CUTOFF_ET` in `.env` (unset = 1:1, no cut-off), read by
+  `orb_session.snapshot` at call time through its `UNSET` defaults; validated in `marketscanner/config.py`.
 - Real-Postgres test for the bars table (opt-in): `MS_TEST_DB=1 pytest tests/integration`.
 
 ## Skill routing
