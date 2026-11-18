@@ -2,6 +2,35 @@
 
 All notable changes to MarketScanner are documented here.
 
+## [0.5.0.0] - 2026-11-18
+
+### Added
+- **Ask the backtester "would other ORB settings have done better?" and get an honest answer.**
+  `--sweep --candle 5,10,15 --reward 1,1.5,2 --cutoff none,13:00,14:00` runs every combination on
+  the same stored bars and compares each with your current `.env` settings, session by session.
+  The first two thirds of the period pick the best row (in-sample); the last third checks it on
+  data it was not picked on (out-of-sample). A variant is only called better when it wins
+  out-of-sample by more than two standard errors and also wins in-sample. Output: `sweep.txt`,
+  `sweep.csv` and `sweep.html` (with an in-sample vs out-of-sample scatter, where overfit rows sit
+  far below the diagonal), plus BUY R and SELL R columns and the exact command to rerun the
+  in-sample best as a full report. A winner resting on fewer than 100 closed trades in a half is
+  named in the verdict as too few to trust. 27 variants over three years of SPY, QQQ and GLD take about
+  2.5 minutes.
+- **Backtest one run with different settings.** `--candle N`, `--reward X` (take profit in box
+  widths; the stop stays one box width) and `--cutoff HH:MM|none` (latest ET close of the
+  confirmation candle). Defaults are what live alerts do, so a plain run is unchanged. Non-default
+  runs get their own folder (e.g. `ORB_c10_r1.5_x1300_...`) and a "Settings:" line in the report.
+
+### Changed
+- Trade charts label the take-profit with its real R (`TP hit 15:32 +1.5R`) instead of always
+  `+1R`. Live alerts at 1:1 are unchanged, to the bit.
+
+### Fixed
+- A second sweep of the same dates with different lists gets its own folder
+  (`..._sweep_c5-15_r1-2_xnone-1400/`) instead of replacing the first one's report.
+- `--candle 7` now says "candle minutes must divide 60" instead of naming an env var you did not set.
+- `sweep.txt` columns stay aligned when a dR cell is wide (e.g. `+37.80 +/- 109.37`).
+
 ## [0.4.1.0] - 2026-11-18
 
 ### Changed
