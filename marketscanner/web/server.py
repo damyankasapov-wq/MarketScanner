@@ -245,6 +245,10 @@ def status_line(snap: orb_session.OrbSnapshot) -> str:
     if snap.proposal is None:
         if snap.box.delta <= 0:
             return "flat opening range — no proposal"
+        late = snap.late_confirmation
+        if late is not None:
+            return (f"confirmation {late.candle_close.astimezone(_ET):%H:%M} after cut-off "
+                    f"{snap.cutoff:%H:%M}, no trade today")
         return f"waiting for confirmation · box {snap.box.bottom:.2f}–{snap.box.top:.2f}"
     p = snap.proposal
     line = f"{p.side} {p.entry:.2f} · TP {p.take_profit:.2f} · SL {p.stop_loss:.2f}"
@@ -252,7 +256,7 @@ def status_line(snap: orb_session.OrbSnapshot) -> str:
     if o is None or o.status == "OPEN":
         return line + " · open"
     hit = "TP hit" if o.status == "TP_HIT" else "SL hit"
-    return f"{line} · {hit} {o.exit_ts.astimezone(_ET):%H:%M} ({o.r_multiple:+.0f}R)"
+    return f"{line} · {hit} {o.exit_ts.astimezone(_ET):%H:%M} ({o.r_multiple:+g}R)"
 
 
 def status_payload(snap: orb_session.OrbSnapshot) -> dict:
@@ -266,6 +270,7 @@ def status_payload(snap: orb_session.OrbSnapshot) -> dict:
         "take_profit": snap.proposal.take_profit,
         "stop_loss": snap.proposal.stop_loss,
         "delta": snap.proposal.delta,
+        "reward_ratio": snap.proposal.reward_ratio,
         "confirm_open": iso(snap.confirmation.candle_open),
         "confirm_close": iso(snap.confirmation.candle_close),
     }
@@ -282,6 +287,8 @@ def status_payload(snap: orb_session.OrbSnapshot) -> dict:
         "box": box,
         "proposal": proposal,
         "outcome": outcome,
+        "late_confirmation_ts": iso(None if snap.late_confirmation is None else snap.late_confirmation.candle_close),
+        "cutoff": None if snap.cutoff is None else f"{snap.cutoff:%H:%M}",
         "status_line": status_line(snap),
     }
 

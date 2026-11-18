@@ -224,7 +224,12 @@ def describe_snapshot(snap: orb_session.OrbSnapshot) -> str:
     parts = [f"box {snap.box.bottom:.2f}–{snap.box.top:.2f} (delta {snap.box.delta:.2f})",
              f"{len(snap.candles)} candles of {snap.candle_minutes} min"]
     if snap.confirmation is None:
-        parts.append("no confirmation candle")
+        late = snap.late_confirmation
+        if late is not None:
+            parts.append(f"confirmation {late.candle_close.astimezone(_ET):%H:%M} ET after cut-off "
+                         f"{snap.cutoff:%H:%M}, no trade")
+        else:
+            parts.append("no confirmation candle")
         return "; ".join(parts)
     c = snap.confirmation
     p = snap.proposal
@@ -238,7 +243,7 @@ def describe_snapshot(snap: orb_session.OrbSnapshot) -> str:
         parts.append("outcome OPEN")
     else:
         parts.append(f"outcome {o.status} at {o.exit_ts.astimezone(_ET):%H:%M} ET "
-                     f"({o.exit_price:.2f}, {o.r_multiple:+.0f}R)")
+                     f"({o.exit_price:.2f}, {o.r_multiple:+g}R)")
     return "; ".join(parts)
 
 

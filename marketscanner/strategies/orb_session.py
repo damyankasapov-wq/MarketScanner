@@ -60,7 +60,8 @@ class Proposal:
     entry: float
     take_profit: float
     stop_loss: float
-    delta: float
+    delta: float                 # box width = the risk per share (the stop distance)
+    reward_ratio: float = 1.0    # take profit in box widths
 
 
 @dataclass(frozen=True)
@@ -69,7 +70,7 @@ class Outcome:
     exit_ts: Optional[datetime] = None     # UTC, the 1-minute bar that touched the level
     exit_candle: Optional[datetime] = None  # UTC bucket start containing exit_ts
     exit_price: Optional[float] = None     # the level touched, not the bar close
-    r_multiple: Optional[float] = None     # +1.0, -1.0, None
+    r_multiple: Optional[float] = None     # +reward_ratio on TP, -1.0 on SL, None while open
 
 
 @dataclass(frozen=True)
@@ -89,6 +90,9 @@ class OrbSnapshot:
     proposal: Optional[Proposal]
     outcome: Optional[Outcome]
     candle_minutes: int
+    # The first confirmation when it closed after the cut-off: no proposal that day.
+    late_confirmation: Optional[Confirmation] = None
+    cutoff: Optional[time] = None          # the cut-off this snapshot applied (ET), None = none
 
 
 # ── time helpers ─────────────────────────────────────────────────────────────
@@ -281,13 +285,13 @@ def format_r(r: Optional[float], default: Optional[float] = None) -> str:
     return f"{sign}{abs(round(r, 2)):g}R"
 
 
-def build_proposal(confirmation: Confirmation, box: Box) -> Proposal:
-    """Entry = confirmation close; TP and SL one box-width away (1:1, what live alerts use)."""
+def build_proposal(confirmation: Confirmation, box: Box, reward_ratio: float = 1.0) -> Proposal:
+    """Entry = confirmation close; SL one box-width away, TP `reward_ratio` box-widths the other way."""
     delta = box.delta
     entry = confirmation.close
     side = "BUY" if confirmation.direction == "UP" else "SELL"
-    tp, sl = levels(entry, delta, side)
-    return Proposal(side, entry, tp, sl, delta)
+    tp, sl = levels(entry, delta, side, reward_ratio)
+    return Proposal(side, entry, tp, sl, delta, reward_ratio)
 
 
 def walk_exit(
@@ -396,7 +400,7 @@ def session_outcome(
         exit_ts=hit.ts,
         exit_candle=candle_floor(hit.ts, sdate, minutes).to_pydatetime(),
         exit_price=hit.price,
-        r_multiple=-1.0 if is_sl else 1.0,
+        r_multiple=-1.0 if is_sl else proposal.reward_ratio,
     )
 
 
@@ -410,10 +414,20 @@ def replay_now(session_date: date) -> datetime:
     return (close + pd.Timedelta(seconds=config.CANDLE_GRACE_SECONDS)).to_pydatetime()
 
 
+class _Unset:
+    def __repr__(self) -> str:
+        return "UNSET"
+
+
+UNSET = _Unset()   # "read config at call time"; for the cut-off, None means explicitly none
+
+
 def snapshot(
     df_1m: pd.DataFrame,
     minutes: Optional[int] = None,
     now: Optional[datetime] = None,
+    reward_ratio=UNSET,
+    cutoff=UNSET,
 ) -> OrbSnapshot:
     """
     Compose everything for the session of the newest bar. This is the only
@@ -421,18 +435,28 @@ def snapshot(
 
     - Empty frame, or no bars inside 09:30-10:30 → box None, nothing else.
     - box.delta <= 0 (flat first hour) → box set, no confirmation/proposal.
+    - `reward_ratio` / `cutoff` default to config (REWARD_RATIO, CONFIRM_CUTOFF_ET),
+      read at call time. A first confirmation closing after the cut-off gives no
+      proposal and sets `late_confirmation`; later candles are never searched,
+      because each would be later still.
     """
     if minutes is None:
         minutes = config.CONFIRM_CANDLE_MINUTES
+    if reward_ratio is UNSET:
+        reward_ratio = config.REWARD_RATIO
+    if cutoff is UNSET:
+        cutoff = config.CONFIRM_CUTOFF_ET
     df = session_slice(df_1m)
     sdate = session_date_of(df)
     candles = to_candles(df, minutes, now=now)
     box = session_box(df)
-    confirmation = proposal = outcome = None
+    confirmation = proposal = outcome = late = None
     if box is not None and box.delta > 0:
         confirmation = find_confirmation(candles, box, minutes)
+        if confirmation is not None and cutoff is not None and after_cutoff(confirmation, cutoff):
+            confirmation, late = None, confirmation
         if confirmation is not None:
-            proposal = build_proposal(confirmation, box)
+            proposal = build_proposal(confirmation, box, reward_ratio)
             outcome = session_outcome(df, confirmation, proposal, minutes)
     return OrbSnapshot(
         session_date=sdate,
@@ -442,7 +466,14 @@ def snapshot(
         proposal=proposal,
         outcome=outcome,
         candle_minutes=minutes,
+        late_confirmation=late,
+        cutoff=cutoff,
     )
+
+
+def after_cutoff(confirmation: Confirmation, cutoff: time) -> bool:
+    """True when the confirmation candle closed after `cutoff` (ET); a close exactly at it counts."""
+    return _to_utc(confirmation.candle_close).tz_convert(config.TIMEZONE).time() > cutoff
 
 
 def utcnow() -> datetime:

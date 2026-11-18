@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import Optional
 
 import pandas as pd
@@ -18,13 +18,15 @@ class Signal:
     # Trade proposal (informational only — nothing trades)
     side: Optional[str] = None            # "BUY" | "SELL"
     entry: Optional[float] = None         # confirmation candle close
-    take_profit: Optional[float] = None   # entry ± delta
+    take_profit: Optional[float] = None   # entry ± reward_ratio × delta
     stop_loss: Optional[float] = None     # entry ∓ delta
     delta: Optional[float] = None         # box top − box bottom
     confirm_open: Optional[datetime] = None   # UTC bucket start of the confirmation candle
     confirm_close: Optional[datetime] = None  # UTC bucket end
     candle_minutes: Optional[int] = None
     session_date: Optional[date] = None   # ET date of the session
+    reward_ratio: float = 1.0             # take profit in box widths (REWARD_RATIO)
+    cutoff_et: Optional[time] = None      # confirmation cut-off in force (CONFIRM_CUTOFF_ET)
 
 
 class Strategy(ABC):

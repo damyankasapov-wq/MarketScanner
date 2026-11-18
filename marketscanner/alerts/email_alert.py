@@ -55,7 +55,9 @@ def build_subject(signal: Signal) -> str:
 def build_rows(signal: Signal, snapshot: Optional[OrbSnapshot] = None) -> list[tuple[str, str]]:
     """The proposal table, in display order. Same content for plain and HTML."""
     side = _side(signal)
-    tp_formula = "entry + delta" if side == "BUY" else "entry − delta"
+    r = signal.reward_ratio
+    times = "" if r == 1.0 else f"{r:g} × "
+    tp_formula = f"entry + {times}delta" if side == "BUY" else f"entry − {times}delta"
     sl_formula = "entry − delta" if side == "BUY" else "entry + delta"
     minutes = signal.candle_minutes or config.CONFIRM_CANDLE_MINUTES
 
@@ -70,7 +72,7 @@ def build_rows(signal: Signal, snapshot: Optional[OrbSnapshot] = None) -> list[t
         (f"Take profit ({tp_formula})", _fmt(signal.take_profit)),
         (f"Stop loss ({sl_formula})", _fmt(signal.stop_loss)),
         ("Range delta", _fmt(signal.delta)),
-        ("Risk / reward", "1 : 1"),
+        ("Risk / reward", f"1 : {r:g}"),
         ("Confirmation candle", candle),
         ("Box top / bottom", f"{_fmt(signal.box_top)} / {_fmt(signal.box_bottom)}"),
         ("Time sent (ET)", _et(signal.fired_at, "%Y-%m-%d %H:%M:%S %Z")),

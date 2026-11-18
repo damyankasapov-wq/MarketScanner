@@ -1,5 +1,8 @@
+import math
 import os
+from datetime import time
 from pathlib import Path
+from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -86,6 +89,46 @@ def _validate_candle_minutes(minutes: int) -> int:
 CONFIRM_CANDLE_MINUTES = _validate_candle_minutes(
     int(os.environ.get("CONFIRM_CANDLE_MINUTES", "5"))
 )
+
+# Take profit in box widths; the stop always stays one box width. Unset = 1 (1:1).
+def _validate_reward_ratio(ratio: float) -> float:
+    if not (ratio > 0 and math.isfinite(ratio)):
+        raise ValueError(f"REWARD_RATIO must be a finite number greater than 0, got {ratio}")
+    return ratio
+
+
+REWARD_RATIO = _validate_reward_ratio(float(os.environ.get("REWARD_RATIO", "1") or "1"))
+
+# Latest ET time a confirmation candle may close and still give a trade. Unset = no cut-off.
+# A later first confirmation means no trade that day (the dashboard says so; no email).
+EARLIEST_CUTOFF = time(10, 30)          # confirmations start at the end of the opening hour
+LATEST_CUTOFF = time(16, 0)
+
+
+def parse_cutoff(text: Optional[str]) -> Optional[time]:
+    """'none' / '' / None → no cut-off, else 'HH:MM' (ET) after 10:30 and no later than 16:00."""
+    t = (text or "").strip().lower()
+    if t in ("none", ""):
+        return None
+    try:
+        hh, mm = t.split(":")
+        cut = time(int(hh), int(mm))
+    except ValueError:
+        raise ValueError(f"cut-off must be HH:MM (ET) or none, got {text!r}") from None
+    validate_cutoff(cut)
+    return cut
+
+
+def validate_cutoff(cut: Optional[time]) -> Optional[time]:
+    if cut is not None and not (EARLIEST_CUTOFF < cut <= LATEST_CUTOFF):
+        raise ValueError(f"cut-off must be after 10:30 and no later than 16:00 ET, got {cut:%H:%M}")
+    return cut
+
+
+try:
+    CONFIRM_CUTOFF_ET: Optional[time] = parse_cutoff(os.environ.get("CONFIRM_CUTOFF_ET"))
+except ValueError as _exc:
+    raise ValueError(f"CONFIRM_CUTOFF_ET: {_exc}") from None
 
 # A candle whose bucket holds the newest 1-minute bar is normally incomplete.
 # It is accepted anyway once the caller's clock is this far past the bucket

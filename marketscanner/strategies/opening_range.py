@@ -50,6 +50,16 @@ class OpeningRangeStrategy(Strategy):
                 )
                 self._warned_flat_session = snap.session_date
             return None
+        if snap.late_confirmation is not None:
+            # The cut-off is final for the session: every later candle would be later still.
+            self._fired_session = snap.session_date
+            log.info(
+                "%s: confirmation %s ET closed after the %s cut-off — no alert today",
+                self.market,
+                snap.late_confirmation.candle_close.astimezone(_ET).strftime("%H:%M"),
+                snap.cutoff.strftime("%H:%M"),
+            )
+            return None
         if snap.proposal is None:
             return None
 
@@ -90,6 +100,8 @@ class OpeningRangeStrategy(Strategy):
             confirm_close=conf.candle_close,
             candle_minutes=snap.candle_minutes,
             session_date=snap.session_date,
+            reward_ratio=prop.reward_ratio,
+            cutoff_et=snap.cutoff,
         )
 
     def reset(self) -> None:

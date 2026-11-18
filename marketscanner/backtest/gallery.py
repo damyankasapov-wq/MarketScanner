@@ -42,7 +42,7 @@ def _trade_session(split: dict[str, dict], frames: dict[str, pd.DataFrame], t: T
 
 def with_trade_levels(snap: OrbSnapshot, t: Trade, df_session: pd.DataFrame) -> OrbSnapshot:
     """
-    The snapshot as the trade saw it. snapshot() proposes the live 1:1 levels; a
+    The snapshot as the trade saw it. The caller passes a plain (1:1, no cut-off) snapshot; a
     trade from a different reward ratio gets its own target, and the in-session
     outcome is recomputed for those levels (a target hit is worth +reward R).
     Unchanged when the levels already match.
@@ -79,7 +79,9 @@ def write_trade_charts(
         try:
             folder.mkdir(parents=True, exist_ok=True)
             df_s = _trade_session(split, frames, t)
-            snap = with_trade_levels(snapshot(df_s, minutes=candle_minutes, now=replay_now(t.session_date)), t, df_s)
+            plain = snapshot(df_s, minutes=candle_minutes, now=replay_now(t.session_date), reward_ratio=1.0,
+                             cutoff=None)
+            snap = with_trade_levels(plain, t, df_s)
             fig = render_chart(snap, t.symbol)
             name = trade_chart_name(t)
             fig.savefig(folder / name, format="png", dpi=90, bbox_inches="tight")

@@ -32,8 +32,8 @@ from marketscanner import config
 from marketscanner.strategies.orb_session import levels, replay_now, session_date_of, snapshot
 
 _ET = pytz.timezone(config.TIMEZONE)
-EARLIEST_CUTOFF = time(10, 30)          # confirmations start at the end of the opening hour
-LATEST_CUTOFF = time(16, 0)
+EARLIEST_CUTOFF = config.EARLIEST_CUTOFF
+LATEST_CUTOFF = config.LATEST_CUTOFF
 
 
 @dataclass(frozen=True)
@@ -65,13 +65,12 @@ class OrbSettings:
                              f"got {self.candle_minutes}") from None
         if not (self.reward_ratio > 0 and math.isfinite(self.reward_ratio)):
             raise ValueError(f"reward ratio must be a finite number greater than 0, got {self.reward_ratio}")
-        if self.cutoff is not None and not (EARLIEST_CUTOFF < self.cutoff <= LATEST_CUTOFF):
-            raise ValueError(f"cut-off must be after 10:30 and no later than 16:00 ET, got {self.cutoff:%H:%M}")
+        config.validate_cutoff(self.cutoff)
 
     @classmethod
     def current(cls) -> "OrbSettings":
-        """What the live scanner does with this machine's .env: its candle size, 1:1, no cut-off."""
-        return cls(config.CONFIRM_CANDLE_MINUTES)
+        """What the live scanner does with this machine's .env: candle size, REWARD_RATIO, CONFIRM_CUTOFF_ET."""
+        return cls(config.CONFIRM_CANDLE_MINUTES, config.REWARD_RATIO, config.CONFIRM_CUTOFF_ET)
 
     def describe(self) -> str:
         cut = "no cut-off" if self.cutoff is None else f"cut-off {self.cutoff:%H:%M} ET"
@@ -123,7 +122,8 @@ class OrbStrategy:
 
     def __init__(self, candle_minutes: Optional[int] = None, settings: Optional[OrbSettings] = None) -> None:
         if settings is None:
-            settings = OrbSettings(candle_minutes or config.CONFIRM_CANDLE_MINUTES)
+            cur = OrbSettings.current()
+            settings = dataclasses.replace(cur, candle_minutes=candle_minutes or cur.candle_minutes)
         elif candle_minutes is not None and candle_minutes != settings.candle_minutes:
             raise ValueError("OrbStrategy: candle_minutes and settings.candle_minutes disagree")
         self.settings = settings
@@ -134,11 +134,12 @@ class OrbStrategy:
         return None if plain is None else self.derive(plain, self.settings)
 
     def plain_idea(self, symbol: str, df_session: pd.DataFrame) -> Optional[TradeIdea]:
-        """The idea at reward 1:1 and no cut-off, exactly what a live alert would propose."""
+        """The idea at reward 1:1 and no cut-off: what a live alert proposes with REWARD_RATIO and CONFIRM_CUTOFF_ET unset."""
         if df_session.empty:
             return None
         sdate = session_date_of(df_session)
-        snap = snapshot(df_session, minutes=self.candle_minutes, now=replay_now(sdate))
+        # Explicit 1:1 and no cut-off: a plain idea must not depend on this machine's .env.
+        snap = snapshot(df_session, minutes=self.candle_minutes, now=replay_now(sdate), reward_ratio=1.0, cutoff=None)
         if snap.confirmation is None or snap.proposal is None:
             return None
         c, p = snap.confirmation, snap.proposal

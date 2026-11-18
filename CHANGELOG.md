@@ -2,6 +2,26 @@
 
 All notable changes to MarketScanner are documented here.
 
+## [0.6.0.0] - 2026-11-18
+
+### Added
+- **Live alerts can use a different take profit or a confirmation cut-off, set in `.env`.**
+  `REWARD_RATIO=1.5` puts the take profit 1.5 box widths from the entry (the stop stays one box
+  width). `CONFIRM_CUTOFF_ET=14:00` drops a day whose first confirmation candle closes after
+  14:00 ET: no email, and the dashboard says "confirmation 14:35 after cut-off 14:00, no trade
+  today" instead of "waiting for confirmation" all afternoon. Leave both unset to keep today's
+  1:1, no-cut-off alerts exactly as they are. Check a value with the backtester sweep first; the
+  first sweep on 2024-2026 found no setting that beats 1:1 with no cut-off.
+- The email states the reward (`Risk / reward 1 : 1.5`, `Take profit (entry + 1.5 × delta)`). The
+  dashboard and `--replay` show the real R of a win (`+1.5R`). Each row in the `signals` table now
+  records the reward and cut-off that produced it (new nullable columns, added automatically on
+  startup).
+
+### Changed
+- The backtester's defaults follow `REWARD_RATIO` / `CONFIRM_CUTOFF_ET`, so a plain run and the
+  sweep's `current .env` row match what live alerts do on this machine. `--reward` / `--cutoff`
+  still override them.
+
 ## [0.5.0.0] - 2026-11-18
 
 ### Added
