@@ -8,6 +8,7 @@ One chart failing never aborts the run: the failure is returned and listed.
 """
 from __future__ import annotations
 
+import dataclasses
 import logging
 from pathlib import Path
 from typing import Optional
@@ -16,7 +17,7 @@ import pandas as pd
 
 from marketscanner.backtest.engine import SKIPPED, Trade
 from marketscanner.data.sessions import session_bars, split_by_et_date
-from marketscanner.strategies.orb_session import replay_now, snapshot
+from marketscanner.strategies.orb_session import OrbSnapshot, replay_now, session_outcome, snapshot
 from marketscanner.ui.chart import render_chart
 
 log = logging.getLogger(__name__)
@@ -37,6 +38,23 @@ def _trade_session(split: dict[str, dict], frames: dict[str, pd.DataFrame], t: T
     if t.symbol not in split:
         split[t.symbol] = split_by_et_date(frames[t.symbol])
     return split[t.symbol].get(t.session_date, frames[t.symbol].iloc[0:0])
+
+
+def with_trade_levels(snap: OrbSnapshot, t: Trade, df_session: pd.DataFrame) -> OrbSnapshot:
+    """
+    The snapshot as the trade saw it. snapshot() proposes the live 1:1 levels; a
+    trade from a different reward ratio gets its own target, and the in-session
+    outcome is recomputed for those levels (a target hit is worth +reward R).
+    Unchanged when the levels already match.
+    """
+    p = snap.proposal
+    if p is None or snap.confirmation is None or (p.take_profit == t.take_profit and p.stop_loss == t.stop_loss):
+        return snap
+    prop = dataclasses.replace(p, take_profit=t.take_profit, stop_loss=t.stop_loss)
+    outcome = session_outcome(df_session, snap.confirmation, prop, snap.candle_minutes)
+    if outcome.status == "TP_HIT" and prop.delta:
+        outcome = dataclasses.replace(outcome, r_multiple=abs(prop.take_profit - prop.entry) / prop.delta)
+    return dataclasses.replace(snap, proposal=prop, outcome=outcome)
 
 
 def write_trade_charts(
@@ -61,7 +79,7 @@ def write_trade_charts(
         try:
             folder.mkdir(parents=True, exist_ok=True)
             df_s = _trade_session(split, frames, t)
-            snap = snapshot(df_s, minutes=candle_minutes, now=replay_now(t.session_date))
+            snap = with_trade_levels(snapshot(df_s, minutes=candle_minutes, now=replay_now(t.session_date)), t, df_s)
             fig = render_chart(snap, t.symbol)
             name = trade_chart_name(t)
             fig.savefig(folder / name, format="png", dpi=90, bbox_inches="tight")

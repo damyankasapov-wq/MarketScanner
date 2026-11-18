@@ -21,18 +21,6 @@ P2 when P0/P1 are clear, P3 nice to have, P4 someday.
 
 Scope accepted for the strategy checker (from /plan-eng-review, 2026-11-16): layers 0 (bars archive in Postgres), 1 (core engine) and 2 (HTML report + trade gallery). Design: `~/.gstack/projects/damyankasapov-wq-MarketScanner/damya-fix-six-dependency-design-20261115-230829.md`.
 
-### Settings sweep with overfitting guards (layer 3)
-
-**What:** Run the strategy under different candle sizes, reward ratios and confirmation cut-off hours side by side.
-
-**Why:** Today only the candle size can be changed (env var); comparing settings needs code edits and gives no protection against fitting the past.
-
-**Context:** Designed and reviewed on 2026-11-18: `~/.gstack/projects/damyankasapov-wq-MarketScanner/damya-claude-office-hours-todos-38e5ad-design-20261118-003041.md` (the "Eng Review Decisions" section at its end wins over the earlier sections). The speed prerequisite shipped in v0.4.1.0. The sweep itself is backtest-only: reward and cut-off are applied after a plain `propose()` through `OrbStrategy.derive`, so `snapshot` and live alerts stay unchanged. Each variant is compared with the current .env settings, as a paired R difference in-sample and out-of-sample with a verdict rule fixed in code, plus BUY R / SELL R columns. Exits are account-independent: compute once per (candle, reward) and reuse across cut-offs.
-
-**Effort:** M
-**Priority:** P2
-**Depends on:** layers 0+1 shipped; backtester speed-up (v0.4.1.0)
-
 ### Splits and dividends in multi-day holds
 
 **What:** Stop raw-price gaps from splits and dividends distorting trades held across sessions.
@@ -92,7 +80,7 @@ From /qa on historical data, 2026-11-15.
 
 **Why:** Confirmations as late as 14:30 / 14:55 ET (GLD 10-21, 11-03) leave almost no session.
 
-**Context:** Pairs with the layer 3 settings sweep, which would measure the effect of a cut-off on past sessions.
+**Context:** Pairs with the layer 3 settings sweep. First real sweep (SPY/QQQ/GLD, 2024-01-01 to 2026-11-13): a 13:00 or 14:00 cut-off did not beat no cut-off in any row, in-sample or out-of-sample.
 
 **Effort:** S
 **Priority:** P2
@@ -163,6 +151,19 @@ From /qa on historical data, 2026-11-15.
 **Depends on:** a second strategy
 
 ## Completed
+
+### Settings sweep with overfitting guards (layer 3)
+
+**What:** Run the strategy under different candle sizes, reward ratios and confirmation cut-off hours side by side.
+
+**Why:** Today only the candle size can be changed (env var); comparing settings needs code edits and gives no protection against fitting the past.
+
+**Context:** Designed and reviewed on 2026-11-18: `~/.gstack/projects/damyankasapov-wq-MarketScanner/damya-claude-office-hours-todos-38e5ad-design-20261118-003041.md` (the "Eng Review Decisions" section at its end wins over the earlier sections). The speed prerequisite shipped in v0.4.1.0. The sweep itself is backtest-only: reward and cut-off are applied after a plain `propose()` through `OrbStrategy.derive`, so `snapshot` and live alerts stay unchanged. Each variant is compared with the current .env settings, as a paired R difference in-sample and out-of-sample with a verdict rule fixed in code, plus BUY R / SELL R columns. Exits are account-independent: compute once per (candle, reward) and reuse across cut-offs.
+
+**Effort:** M
+**Priority:** P2
+**Depends on:** layers 0+1 shipped; backtester speed-up (v0.4.1.0)
+**Completed:** v0.5.0.0 (2026-11-18). Backtest-only; live settings (`REWARD_RATIO` / `CONFIRM_CUTOFF_ET`) follow separately.
 
 ### Second history provider (layer 5)
 
