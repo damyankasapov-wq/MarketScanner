@@ -179,16 +179,23 @@ class _SessionIndex:
         return bisect.bisect_left(self.sessions, db) - bisect.bisect_left(self.sessions, da)
 
 
+def session_indexes(frames: dict[str, pd.DataFrame]) -> dict[str, _SessionIndex]:
+    """Per-symbol session helpers for run_engine; build once and reuse across runs on the same frames."""
+    return {s: _SessionIndex(f) for s, f in frames.items()}
+
+
 def run_engine(
     ideas: list[TradeIdea],
     exits: list[Optional[ExitHit]],
     frames: dict[str, pd.DataFrame],
     cfg: AccountConfig,
     market_order: list[str],
+    session_index: Optional[dict[str, "_SessionIndex"]] = None,
 ) -> list[Trade]:
+    """`session_index` (from session_indexes(frames)) lets repeated runs on the same frames skip rebuilding it."""
     order = {s: i for i, s in enumerate(market_order)}
     sequence = sorted(range(len(ideas)), key=lambda i: (ideas[i].signal_ts, order.get(ideas[i].symbol, 99), i))
-    index = {s: _SessionIndex(f) for s, f in frames.items()}
+    index = session_index if session_index is not None else session_indexes(frames)
 
     cash = cfg.initial_cash
     trades: list[Trade] = []

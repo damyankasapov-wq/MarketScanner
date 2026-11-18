@@ -76,7 +76,9 @@ def build_html(
     coverage: Optional[Coverage] = None,
     chart_paths: Optional[dict[int, str]] = None,
     chart_errors: Optional[dict[int, str]] = None,
+    note: str = "",
 ) -> str:
+    """`note`: an extra line under the title (e.g. non-default ORB settings); omitted when empty."""
     chart_paths, chart_errors = chart_paths or {}, chart_errors or {}
     rows = rpt.ledger_rows(trades)
     head = "".join(f"<th>{_E(c)}</th>" for c in rpt.LEDGER_COLUMNS)
@@ -116,7 +118,7 @@ def build_html(
 <h1>{_E(title)}</h1>
 <p class="sub">Markets {_E(', '.join(summary.symbols))}. Account {_money(summary.initial_cash)}, {_money(summary.per_deal)} per deal,
 minimum cash {_money(summary.min_cash)}. Informational only: a simulation on stored 1-minute bars, not an order.</p>
-{_cards(summary)}
+{f'<p class="sub">{_E(note)}</p>' if note else ''}{_cards(summary)}
 {warnings}
 <h2>Account</h2>
 <img src="data:image/png;base64,{equity}" alt="account: cash, invested and total equity">

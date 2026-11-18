@@ -6,6 +6,13 @@ Reads stored 1-minute bars from the Postgres bars table (backfilling missing
 sessions from yfinance, or Alpaca for older ones, unless --no-backfill), replays the strategy on a simulated
 account and writes a run folder with ledger.csv, equity.png, summary.txt,
 report.html and trades/*.png. Informational only: nothing places orders.
+
+ORB settings for one run: --candle N --reward X --cutoff HH:MM|none (defaults:
+this machine's .env candle size, 1:1, no cut-off, i.e. what live alerts do).
+
+Settings sweep: add --sweep and give comma lists, e.g.
+    --sweep --candle 5,10,15 --reward 1,1.5,2 --cutoff none,13:00,14:00
+which writes sweep.txt, sweep.csv and sweep.html into <run>_sweep/ (see sweep.py).
 """
 from __future__ import annotations
 
@@ -19,12 +26,13 @@ from typing import Callable, Optional
 import pytz
 
 from marketscanner import config
-from marketscanner.backtest import gallery, html_report, report
+from marketscanner.backtest import gallery, html_report, report, sweep_report
 from marketscanner.backtest.engine import AccountConfig, find_exits, run_engine
 from marketscanner.backtest.equity import build_equity
 from marketscanner.backtest.ideas import ideas_from_frames, load_frames
 from marketscanner.backtest.metrics import Coverage, format_summary, summarize
-from marketscanner.backtest.strategy import STRATEGIES, get_strategy
+from marketscanner.backtest.strategy import STRATEGIES, OrbSettings, get_strategy, parse_cutoff
+from marketscanner.backtest.sweep import DEFAULT_CANDLES, DEFAULT_CUTOFFS, DEFAULT_REWARDS, Grid, run_sweep
 from marketscanner.data.backfill import ensure_bars
 
 _ET = pytz.timezone(config.TIMEZONE)
@@ -48,6 +56,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--gallery", choices=["all", "none"], default="all", help="draw a chart for every trade (default all)")
     p.add_argument("--no-backfill", dest="backfill", action="store_false",
                    help="do not fetch missing sessions from yfinance or Alpaca; use only what is stored")
+    p.add_argument("--candle", default=None, metavar="N[,N...]",
+                   help="confirmation candle minutes (default: CONFIRM_CANDLE_MINUTES from .env)")
+    p.add_argument("--reward", default=None, metavar="X[,X...]",
+                   help="take profit in box widths; the stop stays one box width (default 1)")
+    p.add_argument("--cutoff", default=None, metavar="HH:MM|none[,...]",
+                   help="latest ET time the confirmation candle may close; later ones give no trade (default none)")
+    p.add_argument("--sweep", action="store_true",
+                   help="compare every combination of the --candle/--reward/--cutoff lists with the current .env settings")
     return p
 
 
@@ -85,8 +101,58 @@ def validate(parser: argparse.ArgumentParser, args, today: date) -> tuple[date, 
     return start, end, symbols
 
 
-def run_id(strategy: str, start: date, end: date, symbols: list[str]) -> str:
-    return f"{strategy.upper()}_{start:%Y%m%d}-{end:%Y%m%d}_{'-'.join(symbols)}"
+def _split_list(text: Optional[str]) -> list[str]:
+    return [] if text is None else [t.strip() for t in text.split(",") if t.strip()]
+
+
+def parse_settings(parser: argparse.ArgumentParser, args) -> tuple[Optional[OrbSettings], Optional[Grid]]:
+    """(single-run settings, None) without --sweep, (None, grid) with it. Errors go through parser.error."""
+    lists = {"--candle": _split_list(args.candle), "--reward": _split_list(args.reward),
+             "--cutoff": _split_list(args.cutoff)}
+    try:
+        candles = [int(x) for x in lists["--candle"]]
+        rewards = [float(x) for x in lists["--reward"]]
+        cutoffs = [parse_cutoff(x) for x in lists["--cutoff"]]
+    except ValueError as exc:
+        parser.error(f"bad --candle / --reward / --cutoff value: {exc}")
+    for flag, vals in (("--candle", candles), ("--reward", rewards), ("--cutoff", cutoffs)):
+        if len(set(vals)) != len(vals):
+            parser.error(f"{flag} lists a value twice")
+    if not args.sweep:
+        for flag, vals in lists.items():
+            if len(vals) > 1:
+                parser.error(f"{flag} has several values: use --sweep to compare them")
+        try:
+            settings = OrbSettings(
+                candles[0] if candles else config.CONFIRM_CANDLE_MINUTES,
+                rewards[0] if rewards else 1.0,
+                cutoffs[0] if cutoffs else None,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+        return settings, None
+    if args.strategy.strip().upper() != "ORB":
+        parser.error("--sweep only supports the ORB strategy")
+    grid = Grid(tuple(candles) or DEFAULT_CANDLES, tuple(rewards) or DEFAULT_REWARDS,
+                tuple(cutoffs) or DEFAULT_CUTOFFS)
+    try:
+        grid.variants()
+        OrbSettings.current()
+    except ValueError as exc:
+        parser.error(str(exc))
+    return None, grid
+
+
+def run_id(strategy: str, start: date, end: date, symbols: list[str], settings: Optional[OrbSettings] = None) -> str:
+    suffix = settings.suffix() if settings is not None else ""
+    name = f"{strategy.upper()}_{suffix}" if suffix else strategy.upper()
+    return f"{name}_{start:%Y%m%d}-{end:%Y%m%d}_{'-'.join(symbols)}"
+
+
+def rerun_command(args, start: date, end: date, symbols: list[str], settings: OrbSettings) -> str:
+    parts = ["python -m marketscanner.backtest", "--from", f"{start}", "--to", f"{end}", "--markets", ",".join(symbols),
+             "--cash", f"{args.cash:g}", "--per-deal", f"{args.per_deal:g}", "--min-cash", f"{args.min_cash:g}"]
+    return " ".join(parts + settings.cli_args())
 
 
 def run(
@@ -105,7 +171,8 @@ def run(
         print(f"Warning: cash {args.cash:,.2f} minus minimum {args.min_cash:,.2f} is less than one deal "
               f"({args.per_deal:,.2f}); no deal can ever open.", file=sys.stderr)
 
-    strategy = get_strategy(args.strategy)
+    settings, grid = parse_settings(parser, args)
+    strategy = get_strategy(args.strategy, settings=settings) if settings is not None else get_strategy(args.strategy)
     try:
         if store is None:
             from marketscanner.data.pg_bar_store import PostgresBarStore
@@ -122,15 +189,21 @@ def run(
                   "get a copy of .env: copy it from the main checkout.", file=sys.stderr)
         return 2
 
+    if grid is not None:
+        return _run_sweep(args, argv, loaded, result, backfill, grid, cfg, start, end, symbols, out_root)
+
     exits = find_exits(result.ideas, result.frames)
     trades = run_engine(result.ideas, exits, result.frames, cfg, symbols)
     equity = build_equity(trades, result.frames, cfg)
     coverage = Coverage(sessions=result.sessions, backfill=backfill)
     summary = summarize(trades, equity, cfg, strategy.name, start, end, symbols, coverage)
     text = format_summary(summary, coverage)
+    note = f"Settings: {settings.describe()}" if settings is not None and settings.suffix() else ""
+    if note:
+        text = f"{note}\n{text}"
 
     root = out_root or (Path(args.out) if args.out else DEFAULT_OUT)
-    out_dir = root / run_id(strategy.name, start, end, symbols)
+    out_dir = root / run_id(strategy.name, start, end, symbols, settings)
     out_dir.mkdir(parents=True, exist_ok=True)
     report.write_ledger_csv(trades, out_dir / "ledger.csv")
     report.write_text(out_dir / "summary.txt", text)
@@ -142,13 +215,31 @@ def run(
         candle_minutes = getattr(strategy, "candle_minutes", config.CONFIRM_CANDLE_MINUTES)
         chart_paths, chart_errors = gallery.write_trade_charts(
             trades, result.frames, out_dir, candle_minutes, sessions=loaded.sessions)
-    page = html_report.build_html(summary, trades, (out_dir / "equity.png").read_bytes(), coverage, chart_paths, chart_errors)
+    page = html_report.build_html(summary, trades, (out_dir / "equity.png").read_bytes(), coverage, chart_paths,
+                                  chart_errors, note=note)
     (out_dir / "report.html").write_text(page, encoding="utf-8")
     if chart_errors:
         failures = [f"  trade {i}: {e}" for i, e in sorted(chart_errors.items())]
         text += "\n\nCHART FAILURES\n" + "\n".join(failures)
         report.write_text(out_dir / "summary.txt", text)
 
+    print(text)
+    print(f"\nWrote {out_dir}")
+    return 0
+
+
+def _run_sweep(args, argv, loaded, result, backfill, grid: Grid, cfg: AccountConfig, start: date, end: date,
+               symbols: list[str], out_root: Optional[Path]) -> int:
+    if any(a.startswith("--gallery") for a in argv):
+        print("Note: --gallery is ignored with --sweep (no per-variant charts).", file=sys.stderr)
+    res = run_sweep(loaded, symbols, start, end, cfg, grid,
+                    progress=lambda msg: print(f"  sweep: {msg}", file=sys.stderr))
+    coverage = Coverage(sessions=result.sessions, backfill=backfill)
+    pick = res.best.settings if res.best is not None else res.baseline
+    rerun = rerun_command(args, start, end, symbols, pick)
+    root = out_root or (Path(args.out) if args.out else DEFAULT_OUT)
+    out_dir = root / f"{run_id('ORB', start, end, symbols)}_sweep"
+    text = sweep_report.write_all(res, out_dir, coverage, rerun)
     print(text)
     print(f"\nWrote {out_dir}")
     return 0

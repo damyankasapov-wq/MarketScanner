@@ -13,6 +13,8 @@ data holes.
 """
 from __future__ import annotations
 
+from typing import Optional
+
 import numpy as np
 import pandas as pd
 
@@ -21,8 +23,23 @@ from marketscanner.backtest.engine import AccountConfig, SKIPPED, Trade
 COLUMNS = ["cash", "invested", "unrealised", "equity"]
 
 
-def sample_grid(trades: list[Trade], frames: dict[str, pd.DataFrame]) -> pd.DatetimeIndex:
+def frame_grid_ns(frames: dict[str, pd.DataFrame]) -> np.ndarray:
+    """The frames' part of the sample grid (5-minute bars and each frame's last bar), int64 UTC ns, unique."""
+    parts: list[np.ndarray] = []
+    for f in frames.values():
+        if len(f):
+            idx = f.index.tz_convert("UTC").as_unit("ns")
+            parts.append(idx[idx.minute % 5 == 0].asi8)
+            parts.append(idx[-1:].asi8)
+    return np.unique(np.concatenate(parts)) if parts else np.array([], dtype=np.int64)
+
+
+def sample_grid(trades: list[Trade], frames: dict[str, pd.DataFrame],
+                base_grid: Optional[np.ndarray] = None) -> pd.DatetimeIndex:
     """
+    `base_grid` (from frame_grid_ns(frames)) lets repeated runs on the same frames
+    skip recomputing the frames' part; only the trade events are added.
+
     Every 5-minute bar of every frame, each frame's last bar (period end: marks
     equal each trade's mark_price) and every trade open/close, sorted and unique.
     Built in one step from int64 nanoseconds: unioning one timestamp at a time
@@ -33,24 +50,22 @@ def sample_grid(trades: list[Trade], frames: dict[str, pd.DataFrame]) -> pd.Date
     duplicate bar timestamps collapse to one point. Trade times must be
     timezone-aware (a naive one raises, as before).
     """
-    parts: list[np.ndarray] = []
-    for f in frames.values():
-        if len(f):
-            idx = f.index.tz_convert("UTC").as_unit("ns")
-            parts.append(idx[idx.minute % 5 == 0].asi8)
-            parts.append(idx[-1:].asi8)
+    base = frame_grid_ns(frames) if base_grid is None else base_grid
     events = [pd.Timestamp(ts).tz_convert("UTC").value
               for t in trades for ts in (t.opened_at, t.closed_at) if ts is not None]
     if events:
-        parts.append(np.asarray(events, dtype=np.int64))
-    if not parts:
+        values = np.unique(np.concatenate([base, np.asarray(events, dtype=np.int64)]))
+    else:
+        values = base
+    if len(values) == 0:
         return pd.DatetimeIndex([], tz="UTC")
-    values = np.unique(np.concatenate(parts))
-    return pd.DatetimeIndex(values.view("datetime64[ns]")).tz_localize("UTC")
+    return pd.DatetimeIndex(np.asarray(values, dtype=np.int64).view("datetime64[ns]")).tz_localize("UTC")
 
 
-def build_equity(trades: list[Trade], frames: dict[str, pd.DataFrame], cfg: AccountConfig) -> pd.DataFrame:
-    grid = sample_grid(trades, frames)
+def build_equity(trades: list[Trade], frames: dict[str, pd.DataFrame], cfg: AccountConfig,
+                 base_grid: Optional[np.ndarray] = None) -> pd.DataFrame:
+    """`base_grid`: see sample_grid; the result is the same with or without it."""
+    grid = sample_grid(trades, frames, base_grid)
     n = len(grid)
     if n == 0:
         return pd.DataFrame(columns=COLUMNS, index=pd.DatetimeIndex([], tz="UTC"), dtype="float64")
