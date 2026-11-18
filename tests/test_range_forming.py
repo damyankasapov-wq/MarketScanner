@@ -42,9 +42,11 @@ def test_live_strategy_does_not_warn_flat_before_1030(caplog):
 
 def test_range_is_final_from_1030_by_bar_or_by_clock():
     assert orb_session.snapshot(df_of(ORB_BARS + C_GREEN_ABOVE + TRAIL), 5, now=None).range_final
-    # no bar at 10:30 yet (feed gap), but the clock is past it
-    assert orb_session.snapshot(df_of(ORB_BARS), 5, now=utc(2024, 11, 6, 15, 30, 5)).range_final
-    assert not orb_session.snapshot(df_of(ORB_BARS), 5, now=utc(2024, 11, 6, 15, 29, 50)).range_final
+    # no bar at 10:30 yet (feed gap): final once the clock is CANDLE_GRACE_SECONDS (90) past 10:30,
+    # so a late-arriving 10:29 bar can still widen the box
+    assert orb_session.snapshot(df_of(ORB_BARS), 5, now=utc(2024, 11, 6, 15, 31, 30)).range_final
+    assert not orb_session.snapshot(df_of(ORB_BARS), 5, now=utc(2024, 11, 6, 15, 31, 29)).range_final
+    assert not orb_session.snapshot(df_of(ORB_BARS), 5, now=utc(2024, 11, 6, 15, 30, 5)).range_final
 
 
 def test_flat_range_after_1030_still_says_flat():

@@ -243,7 +243,8 @@ def status_line(snap: orb_session.OrbSnapshot) -> str:
     if snap.box is None:
         return "waiting for market open" if snap.session_date is None else "building range"
     if not snap.range_final:
-        return f"building range until 10:30 ET · so far {snap.box.bottom:.2f}–{snap.box.top:.2f}"
+        return (f"building range until {config.ORB_END_HOUR}:{config.ORB_END_MINUTE:02d} ET · so far "
+                f"{snap.box.bottom:.2f}–{snap.box.top:.2f}")
     if snap.proposal is None:
         if snap.box.delta <= 0:
             return "flat opening range — no proposal"

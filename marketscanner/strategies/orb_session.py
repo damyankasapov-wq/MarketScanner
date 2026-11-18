@@ -475,9 +475,14 @@ def snapshot(
 
 
 def range_is_final(df: pd.DataFrame, sdate: date, now: Optional[datetime] = None) -> bool:
-    """True once the opening hour is over: a bar at or after 10:30 ET, or `now` past it."""
+    """
+    True once the opening hour is over: a bar at or after 10:30 ET, or `now` past 10:30 by
+    CANDLE_GRACE_SECONDS (a late 10:29 bar can still move the box; a feed gap has no 10:30 bar).
+    """
     end = orb_end_utc(sdate)
-    return df.index[-1] >= end or (now is not None and _to_utc(now) >= end)
+    if df.index[-1] >= end:
+        return True
+    return now is not None and _to_utc(now) >= end + pd.Timedelta(seconds=config.CANDLE_GRACE_SECONDS)
 
 
 def after_cutoff(confirmation: Confirmation, cutoff: time) -> bool:
