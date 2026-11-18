@@ -56,7 +56,12 @@ class OrbSettings:
     cutoff: Optional[time] = None
 
     def __post_init__(self) -> None:
-        config._validate_candle_minutes(self.candle_minutes)
+        try:
+            config._validate_candle_minutes(self.candle_minutes)
+        except ValueError:
+            # The config message names the env var; a --candle typo should name the setting instead.
+            raise ValueError("candle minutes must divide 60 (1,2,3,4,5,6,10,12,15,20,30,60), "
+                             f"got {self.candle_minutes}") from None
         if not self.reward_ratio > 0:
             raise ValueError(f"reward ratio must be greater than 0, got {self.reward_ratio}")
         if self.cutoff is not None and not (EARLIEST_CUTOFF < self.cutoff <= LATEST_CUTOFF):
