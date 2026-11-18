@@ -242,6 +242,8 @@ def status_line(snap: orb_session.OrbSnapshot) -> str:
     """One-line card status: proposal numbers and where the trade stands."""
     if snap.box is None:
         return "waiting for market open" if snap.session_date is None else "building range"
+    if not snap.range_final:
+        return f"building range until 10:30 ET · so far {snap.box.bottom:.2f}–{snap.box.top:.2f}"
     if snap.proposal is None:
         if snap.box.delta <= 0:
             return "flat opening range — no proposal"
@@ -289,6 +291,7 @@ def status_payload(snap: orb_session.OrbSnapshot) -> dict:
         "outcome": outcome,
         "late_confirmation_ts": iso(None if snap.late_confirmation is None else snap.late_confirmation.candle_close),
         "cutoff": None if snap.cutoff is None else f"{snap.cutoff:%H:%M}",
+        "range_final": snap.range_final,
         "status_line": status_line(snap),
     }
 

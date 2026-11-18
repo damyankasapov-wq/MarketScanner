@@ -93,6 +93,8 @@ class OrbSnapshot:
     # The first confirmation when it closed after the cut-off: no proposal that day.
     late_confirmation: Optional[Confirmation] = None
     cutoff: Optional[time] = None          # the cut-off this snapshot applied (ET), None = none
+    # False while 09:30-10:30 ET is still running: the box is only the range so far.
+    range_final: bool = True
 
 
 # ── time helpers ─────────────────────────────────────────────────────────────
@@ -460,6 +462,7 @@ def snapshot(
             outcome = session_outcome(df, confirmation, proposal, minutes)
     return OrbSnapshot(
         session_date=sdate,
+        range_final=box is None or range_is_final(df, sdate, now),
         candles=candles,
         box=box,
         confirmation=confirmation,
@@ -469,6 +472,12 @@ def snapshot(
         late_confirmation=late,
         cutoff=cutoff,
     )
+
+
+def range_is_final(df: pd.DataFrame, sdate: date, now: Optional[datetime] = None) -> bool:
+    """True once the opening hour is over: a bar at or after 10:30 ET, or `now` past it."""
+    end = orb_end_utc(sdate)
+    return df.index[-1] >= end or (now is not None and _to_utc(now) >= end)
 
 
 def after_cutoff(confirmation: Confirmation, cutoff: time) -> bool:
