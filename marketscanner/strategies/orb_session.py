@@ -260,13 +260,34 @@ def find_confirmation(
     )
 
 
+def levels(entry: float, delta: float, side: str, reward_ratio: float = 1.0) -> tuple[float, float]:
+    """
+    (take_profit, stop_loss) for a trade: the stop one box-width (`delta`) from
+    the entry, the target `reward_ratio` box-widths the other way. At the default
+    1.0 the result is bit-identical to entry +/- delta.
+    """
+    if side == "BUY":
+        return entry + reward_ratio * delta, entry - delta
+    return entry - reward_ratio * delta, entry + delta
+
+
+def format_r(r: Optional[float], default: Optional[float] = None) -> str:
+    """An R multiple for display: +1R, +1.5R, −1R (Unicode minus), +0.37R; '' when unknown."""
+    if r is None:
+        r = default
+    if r is None:
+        return ""
+    sign = "+" if r >= 0 else "−"
+    return f"{sign}{abs(round(r, 2)):g}R"
+
+
 def build_proposal(confirmation: Confirmation, box: Box) -> Proposal:
-    """Entry = confirmation close; TP and SL one box-width away (fixed 1:1)."""
+    """Entry = confirmation close; TP and SL one box-width away (1:1, what live alerts use)."""
     delta = box.delta
     entry = confirmation.close
-    if confirmation.direction == "UP":
-        return Proposal("BUY", entry, entry + delta, entry - delta, delta)
-    return Proposal("SELL", entry, entry - delta, entry + delta, delta)
+    side = "BUY" if confirmation.direction == "UP" else "SELL"
+    tp, sl = levels(entry, delta, side)
+    return Proposal(side, entry, tp, sl, delta)
 
 
 def walk_exit(

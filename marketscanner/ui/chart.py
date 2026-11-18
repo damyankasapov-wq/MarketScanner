@@ -32,7 +32,7 @@ import pandas as pd
 import pytz
 
 from marketscanner import config
-from marketscanner.strategies.orb_session import OrbSnapshot
+from marketscanner.strategies.orb_session import OrbSnapshot, format_r
 
 _ET = pytz.timezone(config.TIMEZONE)
 
@@ -188,13 +188,13 @@ def render_chart(snapshot: OrbSnapshot, market: str) -> Figure:
                 ha = "right" if exit_pos > n - 7 else ("left" if exit_pos < 6 else "center")
                 if outcome.status == "TP_HIT":
                     ax.plot(exit_pos, tp, marker="v", markersize=11, color=_TP, zorder=5)
-                    ax.text(exit_pos, tp + gap, f"TP hit {hit_et}  +1R",
+                    ax.text(exit_pos, tp + gap, f"TP hit {hit_et}  {format_r(outcome.r_multiple, 1.0)}",
                             ha=ha, va="bottom", fontsize=8, fontweight="bold", color=_TP,
                             bbox=_PILL, zorder=6)
                     y_hi = max(y_hi, tp + gap)
                 else:
                     ax.plot(exit_pos, sl, marker="^", markersize=11, color=_SL, zorder=5)
-                    ax.text(exit_pos, sl - gap, f"SL hit {hit_et}  −1R",
+                    ax.text(exit_pos, sl - gap, f"SL hit {hit_et}  {format_r(outcome.r_multiple, -1.0)}",
                             ha=ha, va="top", fontsize=8, fontweight="bold", color=_SL,
                             bbox=_PILL, zorder=6)
                     y_lo = min(y_lo, sl - gap)
