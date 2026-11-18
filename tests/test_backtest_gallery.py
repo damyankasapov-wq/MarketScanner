@@ -72,7 +72,7 @@ def test_html_has_every_ledger_row_and_the_headline_numbers(tmp_path):
     paths, errors = gallery.write_trade_charts(trades, res.frames, tmp_path, 5)
     report.save_figure(report.render_equity_figure(eq, trades, summary), tmp_path / "equity.png")
     page = html_report.build_html(summary, trades, (tmp_path / "equity.png").read_bytes(), Coverage(sessions=res.sessions), paths, errors)
-    assert page.count("<tr>") == 1 + len(trades)                      # header row + one per trade
+    assert page.count("<tr>") == (1 + len(trades)) + (1 + len(summary.by_symbol))  # ledger + by-market table
     assert "SKIPPED" in page and "WIN" in page and "LOSS" in page
     assert "data:image/png;base64," in page and 'src="trades/001_SPY_2024-11-06.png"' in page
     assert f"{summary.final_equity:,.2f}" in page and "Data coverage" in page and "Informational only" in page
@@ -84,6 +84,20 @@ def test_html_without_a_gallery_has_no_trades_section(tmp_path):
     res, trades, eq, summary = _run()
     page = html_report.build_html(summary, trades, b"\x89PNG", None, {}, {})
     assert "<h2>Trades</h2>" not in page and "<h2>Data coverage</h2>" not in page
+
+
+def test_html_has_a_by_market_table_best_pnl_first():
+    res, trades, eq, summary = _run()
+    page = html_report.build_html(summary, trades, b"x", None, {}, {})
+    assert "<h2>By market</h2>" in page and "<th>Wins / losses</th>" in page
+    table = page.split('<table class="mkt">')[1].split("</table>")[0]
+    order = sorted(summary.by_symbol, key=lambda k: -summary.by_symbol[k]["pnl"])
+    positions = [table.index(f"<td>{sym}</td>") for sym in order]
+    assert positions == sorted(positions)
+    for sym, d in summary.by_symbol.items():
+        assert f"{d['pnl']:+,.2f}" in table
+        assert f"{d['wins']} / {d['losses']}" in table
+    assert ("<th>Skipped (cash)</th>" in table) == any(d["skipped"] for d in summary.by_symbol.values())
 
 
 def test_html_lists_a_failed_chart_and_escapes_text():
