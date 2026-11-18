@@ -22,7 +22,7 @@ from marketscanner import config
 from marketscanner.backtest import gallery, html_report, report
 from marketscanner.backtest.engine import AccountConfig, find_exits, run_engine
 from marketscanner.backtest.equity import build_equity
-from marketscanner.backtest.ideas import generate_ideas
+from marketscanner.backtest.ideas import ideas_from_frames, load_frames
 from marketscanner.backtest.metrics import Coverage, format_summary, summarize
 from marketscanner.backtest.strategy import STRATEGIES, get_strategy
 from marketscanner.data.backfill import ensure_bars
@@ -111,7 +111,8 @@ def run(
             from marketscanner.data.pg_bar_store import PostgresBarStore
             store = PostgresBarStore()
         backfill = ensure_bars(store, symbols, start, end, fetch=fetch, today=today) if args.backfill else None
-        result = generate_ideas(store, strategy, symbols, start, end)
+        loaded = load_frames(store, symbols, start, end)
+        result = ideas_from_frames(loaded, strategy, symbols, start, end)
     except Exception as exc:  # noqa: BLE001 - one clear message beats a traceback here
         print(f"Cannot use the bars store: {exc!r}\n"
               f"Using DB_HOST={config.DB['host']} DB_PORT={config.DB['port']} DB_NAME={config.DB['dbname']}.\n"
@@ -139,7 +140,8 @@ def run(
     chart_errors: dict = {}
     if args.gallery == "all":
         candle_minutes = getattr(strategy, "candle_minutes", config.CONFIRM_CANDLE_MINUTES)
-        chart_paths, chart_errors = gallery.write_trade_charts(trades, result.frames, out_dir, candle_minutes)
+        chart_paths, chart_errors = gallery.write_trade_charts(
+            trades, result.frames, out_dir, candle_minutes, sessions=loaded.sessions)
     page = html_report.build_html(summary, trades, (out_dir / "equity.png").read_bytes(), coverage, chart_paths, chart_errors)
     (out_dir / "report.html").write_text(page, encoding="utf-8")
     if chart_errors:
