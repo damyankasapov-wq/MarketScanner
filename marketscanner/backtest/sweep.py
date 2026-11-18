@@ -64,6 +64,15 @@ class Grid:
         """Every combination, in grid order (candle, then reward, then cut-off)."""
         return [OrbSettings(c, r, x) for c, r, x in product(self.candles, self.rewards, self.cutoffs)]
 
+    def tag(self) -> str:
+        """Folder-name part naming a non-default grid ('' for the default), so a narrower sweep of the
+        same dates gets its own folder instead of overwriting the full one."""
+        if self == Grid():
+            return ""
+        cut = "-".join("none" if x is None else f"{x:%H%M}" for x in self.cutoffs)
+        return (f"c{'-'.join(str(c) for c in self.candles)}_r{'-'.join(f'{r:g}' for r in self.rewards)}"
+                f"_x{cut}")
+
 
 @dataclass
 class HalfStats:

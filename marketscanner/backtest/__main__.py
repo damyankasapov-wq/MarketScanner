@@ -12,7 +12,8 @@ this machine's .env candle size, 1:1, no cut-off, i.e. what live alerts do).
 
 Settings sweep: add --sweep and give comma lists, e.g.
     --sweep --candle 5,10,15 --reward 1,1.5,2 --cutoff none,13:00,14:00
-which writes sweep.txt, sweep.csv and sweep.html into <run>_sweep/ (see sweep.py).
+which writes sweep.txt, sweep.csv and sweep.html into <run>_sweep/ (<run>_sweep_<grid>/ for a
+non-default grid, so sweeps of the same dates with different lists keep separate folders).
 """
 from __future__ import annotations
 
@@ -238,7 +239,8 @@ def _run_sweep(args, argv, loaded, result, backfill, grid: Grid, cfg: AccountCon
     pick = res.best.settings if res.best is not None else res.baseline
     rerun = rerun_command(args, start, end, symbols, pick)
     root = out_root or (Path(args.out) if args.out else DEFAULT_OUT)
-    out_dir = root / f"{run_id('ORB', start, end, symbols)}_sweep"
+    tag = grid.tag()
+    out_dir = root / (f"{run_id('ORB', start, end, symbols)}_sweep" + (f"_{tag}" if tag else ""))
     text = sweep_report.write_all(res, out_dir, coverage, rerun)
     print(text)
     print(f"\nWrote {out_dir}")

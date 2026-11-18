@@ -408,7 +408,7 @@ def test_cli_sweep_end_to_end_and_the_rerun_command_reproduces_its_row(tmp_path,
             "--per-deal", "1000", "--min-cash", "2000", "--no-backfill",
             "--sweep", "--candle", "5,10", "--reward", "1,2", "--cutoff", "none,13:00"]
     assert run(argv, store=store, today=date(2024, 6, 1), out_root=tmp_path) == 0
-    out = tmp_path / f"{run_id('ORB', DAYS[0], DAYS[-1], SYMS)}_sweep"
+    out = tmp_path / f"{run_id('ORB', DAYS[0], DAYS[-1], SYMS)}_sweep_c5-10_r1-2_xnone-1300"
     for f in ("sweep.txt", "sweep.csv", "sweep.html"):
         assert (out / f).exists()
     printed = capsys.readouterr().out
