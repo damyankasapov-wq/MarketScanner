@@ -2,6 +2,14 @@
 
 All notable changes to MarketScanner are documented here.
 
+## [0.6.2.0] - 2026-11-19
+
+### Added
+- **The backtest report now has a "By market" table.** `report.html` shows each market's trades,
+  wins / losses (with open count), win rate and P&L right under the summary cards, best P&L first.
+  P&L includes open trades marked at the last close, so the rows add up to the account total.
+  A "Skipped (cash)" column appears only when a run skipped trades for lack of cash.
+
 ## [0.6.1.0] - 2026-11-18
 
 ### Fixed
