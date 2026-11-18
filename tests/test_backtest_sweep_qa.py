@@ -51,3 +51,17 @@ def test_text_table_columns_stay_aligned_with_wide_cells():
         assert line[k - 2:k] == "  " and line[k - 3] != " ", line    # DD% ends where the header says
     text = sweep_report.format_text(result)
     assert "+37.80 +/- 109.37" in text and "-111.24 +/- 74.37" in text
+
+
+# Regression: ISSUE-001 - a second sweep of the same dates with a different grid wrote into the
+# same <run>_sweep folder and silently replaced the first sweep's report.
+# Found by /qa on 2026-11-18
+def test_grid_tag_gives_each_grid_its_own_folder():
+    from datetime import time
+
+    from marketscanner.backtest.sweep import Grid
+
+    assert Grid().tag() == ""
+    assert Grid((5, 15), (1.0, 2.0), (None, time(14, 0))).tag() == "c5-15_r1-2_xnone-1400"
+    assert Grid((10,), (1.5,), (None,)).tag() == "c10_r1.5_xnone"
+    assert Grid((5, 15), (1.0, 2.0), (None,)).tag() != Grid((5, 15), (1.0, 2.0), (None, time(14, 0))).tag()
